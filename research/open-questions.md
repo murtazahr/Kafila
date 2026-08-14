@@ -195,7 +195,25 @@ cheaply — is open. Interacts with R2, since recovery is an alignment problem.
 
 ## R9 — Does lazy loading hold on discrete VRAM?
 
-**Status:** open · **Surfaced:** Stage 0 experiment #1
+**Status:** ANSWERED — yes, identically · **Surfaced:** Stage 0 experiment #1
+· **Answered:** on an L40S (CUDA 12.8, driver 570), 2026-08-14
+
+Re-running the same measurement on discrete VRAM reproduces the Metal result
+to 0.1 MiB in every configuration. Resident memory after loading is 0.0 MiB
+whatever is loaded, and after evaluation it tracks manifest bytes: 1433.6 MiB
+for the whole model, 210.0 MiB for a quarter of it. The decisive comparison
+holds too — an unfiltered load evaluating only one shard's 77 of 311 tensors
+costs 210.0 MiB, exactly what the filtered load costs.
+
+So the conclusion carries: **laziness, not the manifest filter, is what keeps
+device memory proportional to what a node uses**, on unified and discrete
+memory alike. The filter remains worth keeping for file work and for making
+it impossible to bind a foreign block, but it is not the capacity mechanism
+and the design should not claim it is.
+
+The original entry follows.
+
+---
 
 Measured on Metal: MLX loads safetensors lazily, and resident memory after
 loading is 0.0 MiB regardless of how much was loaded. An unfiltered load that

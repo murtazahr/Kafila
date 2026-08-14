@@ -2,6 +2,7 @@ package mlxrunner
 
 import (
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/ollama/ollama/x/mlxrunner/mlx"
@@ -29,6 +30,12 @@ func TestShardLoadMemory(t *testing.T) {
 	if err := mlx.CheckInit(); err != nil {
 		t.Skipf("MLX runtime unavailable: %v", err)
 	}
+
+	// MLX streams are thread-local on CUDA, so every call below has to happen
+	// on one OS thread. The runner gets this from mlxthread; a test has to ask
+	// for it explicitly or the Go scheduler may migrate the goroutine mid-test.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	root, err := model.Open(modelName)
 	if err != nil {
@@ -129,7 +136,13 @@ func TestShardLoadMemory(t *testing.T) {
 	// the manifest filter saves file and page-cache work rather than VRAM, and
 	// the design should say that rather than claiming it is what distributes
 	// capacity. Measure it instead of assuming either way.
-	t.Run("unfiltered load, partial eval", func(t *testing.T) {
+	//
+	// Deliberately not a subtest: t.Run runs the closure on a new goroutine,
+	// and CUDA's MLX streams are thread-local, so evaluating there fails with
+	// "no Stream(gpu, 0) in current thread". Metal tolerates the hop; CUDA does
+	// not. This is the same constraint mlxthread exists to enforce in the
+	// runner.
+	{
 		base := reset()
 
 		all, err := loadTensorsFromManifest(root)
@@ -154,12 +167,10 @@ func TestShardLoadMemory(t *testing.T) {
 		mlx.Eval(arrays...)
 		afterEval := mlx.ActiveMemory()
 
-		t.Logf("unfiltered load, eval %d of %d tensors | resident after load %7.1f MiB, after eval %7.1f MiB",
-			len(arrays), len(all),
+		t.Logf("%-28s %3d of %d tensors | %25s resident after load %7.1f MiB, after eval %7.1f MiB",
+			"unfiltered load, part eval", len(arrays), len(all), "",
 			float64(afterLoad-base)/(1<<20), float64(afterEval-base)/(1<<20))
-
-		reset()
-	})
+	}
 
 	reset()
 }
