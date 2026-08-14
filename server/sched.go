@@ -586,6 +586,9 @@ func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.De
 		} else {
 			modelName := req.model.ShortName
 			llama, err = mlxrunner.NewClient(modelName, req.opts.NumCtx)
+			if err == nil && clusterEnabled() {
+				llama = newClusterPipeline(modelName, llama)
+			}
 		}
 		if err != nil {
 			slog.Info("failed to create server", "model", req.model.ShortName, "error", err)

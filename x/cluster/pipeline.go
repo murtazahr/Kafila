@@ -219,6 +219,9 @@ func (p *Pipeline) Ping(ctx context.Context) error {
 
 // Close shuts every stage down, attempting all of them before reporting. A
 // stage left running would hold device memory the scheduler has written off.
+//
+// If the trace destination is also an io.Closer — a file, typically — it is
+// closed last, once no stage can still be writing spans to it.
 func (p *Pipeline) Close() error {
 	var errs []error
 	for i, s := range p.stages {
@@ -226,6 +229,13 @@ func (p *Pipeline) Close() error {
 			errs = append(errs, fmt.Errorf("stage %d (%s): %w", i, p.plan.Stages[i].Node.Name, err))
 		}
 	}
+
+	if c, ok := p.traceOut.(io.Closer); ok && p.traceOut != nil {
+		if err := c.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("trace: %w", err))
+		}
+	}
+
 	return errors.Join(errs...)
 }
 
