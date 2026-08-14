@@ -189,10 +189,11 @@ func TestRawBytesMatchesBytes(t *testing.T) {
 
 	src := FromValues([]float32{1, 2, 3, 4}, 2, 2)
 
-	raw, err := src.RawBytes()
+	raw, release, err := src.RawBytes()
 	if err != nil {
 		t.Fatalf("RawBytes failed: %v", err)
 	}
+	defer release()
 	cp, err := src.Bytes()
 	if err != nil {
 		t.Fatalf("Bytes failed: %v", err)

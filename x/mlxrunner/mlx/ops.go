@@ -49,6 +49,16 @@ func (t *Array) AsType(dtype DType) *Array {
 	return out
 }
 
+// View reinterprets the array's bits as another dtype without converting them.
+// Unlike AsType, which changes the values, this changes only how the same bytes
+// are read. Widths must match, or the last axis is rescaled accordingly, and the
+// last axis must be contiguous.
+func (t *Array) View(dtype DType) *Array {
+	out := New("VIEW")
+	C.mlx_view(&out.ctx, t.ctx, C.mlx_dtype(dtype), DefaultStream().ctx)
+	return out
+}
+
 func (t *Array) AsStrided(shape []int, strides []int, offset int) *Array {
 	cShape := make([]C.int, len(shape))
 	for i, s := range shape {

@@ -1,19 +1,6 @@
 package mlx
 
-/*
-#include "generated.h"
-
-// cgo has no representation for the 2-byte float types these two accessors
-// return, so the cast to an untyped pointer is done in C. Everything else has
-// a Go-representable element type and is called directly.
-static const void *ollamaArrayDataFloat16(const mlx_array arr) {
-	return (const void *)mlx_array_data_float16(arr);
-}
-
-static const void *ollamaArrayDataBFloat16(const mlx_array arr) {
-	return (const void *)mlx_array_data_bfloat16(arr);
-}
-*/
+// #include "generated.h"
 import "C"
 
 import (
@@ -25,10 +12,23 @@ import (
 //
 // Ints and Floats already read element data, but each panics unless the array
 // is exactly I32 or F32. Hidden states carry the model's compute dtype, which
-// for these models is BF16, so moving one through those accessors means an
+// for these models is bf16, so moving one through those accessors means an
 // AsType(DTypeFloat32) conversion that doubles its size. For activations
 // crossing a network that doubling is paid on every hop, so the transport path
 // needs a route that keeps the original dtype.
+//
+// The read goes through an unsigned integer view of the same width rather than
+// the accessor matching the array's own dtype. That is not a stylistic choice:
+// mlx-c guards its 16-bit float accessors behind HAS_FLOAT16 and HAS_BFLOAT16,
+// which Apple clang defines and gcc does not, so libmlxc.so built for CUDA
+// exports twelve data accessors where the Metal build exports fourteen —
+// mlx_array_data_bfloat16 and mlx_array_data_float16 are simply absent. Because
+// the symbols are resolved through dlopen into function pointers, calling one
+// that was never defined jumps to address zero and takes the process with it.
+//
+// Reading every dtype through uint8/16/32/64, which are present everywhere,
+// removes that whole class of failure and leaves one code path to test rather
+// than one per platform.
 
 // ItemSize returns the size in bytes of a single element of this dtype.
 func (t DType) ItemSize() int {
@@ -46,73 +46,84 @@ func (t DType) ItemSize() int {
 	}
 }
 
-// dataPointer returns a pointer to the array's contiguous element storage.
-//
-// The pointer is taken through the accessor matching the array's own dtype
-// rather than a single type-punned call, because the C API validates the dtype
-// on each accessor.
-func (t *Array) dataPointer() (unsafe.Pointer, error) {
-	switch dt := t.DType(); dt {
-	case DTypeBool:
-		return unsafe.Pointer(C.mlx_array_data_bool(t.ctx)), nil
-	case DTypeUint8:
-		return unsafe.Pointer(C.mlx_array_data_uint8(t.ctx)), nil
-	case DTypeUint16:
-		return unsafe.Pointer(C.mlx_array_data_uint16(t.ctx)), nil
-	case DTypeUint32:
-		return unsafe.Pointer(C.mlx_array_data_uint32(t.ctx)), nil
-	case DTypeUint64:
-		return unsafe.Pointer(C.mlx_array_data_uint64(t.ctx)), nil
-	case DTypeInt8:
-		return unsafe.Pointer(C.mlx_array_data_int8(t.ctx)), nil
-	case DTypeInt16:
-		return unsafe.Pointer(C.mlx_array_data_int16(t.ctx)), nil
-	case DTypeInt32:
-		return unsafe.Pointer(C.mlx_array_data_int32(t.ctx)), nil
-	case DTypeInt64:
-		return unsafe.Pointer(C.mlx_array_data_int64(t.ctx)), nil
-	case DTypeFloat16:
-		return unsafe.Pointer(C.ollamaArrayDataFloat16(t.ctx)), nil
-	case DTypeFloat32:
-		return unsafe.Pointer(C.mlx_array_data_float32(t.ctx)), nil
-	case DTypeFloat64:
-		return unsafe.Pointer(C.mlx_array_data_float64(t.ctx)), nil
-	case DTypeBFloat16:
-		return unsafe.Pointer(C.ollamaArrayDataBFloat16(t.ctx)), nil
-	case DTypeComplex64:
-		return unsafe.Pointer(C.mlx_array_data_complex64(t.ctx)), nil
+// byteView returns the unsigned integer dtype with the same width, which is the
+// dtype an array is reinterpreted as in order to read its bytes.
+func byteView(size int) (DType, bool) {
+	switch size {
+	case 1:
+		return DTypeUint8, true
+	case 2:
+		return DTypeUint16, true
+	case 4:
+		return DTypeUint32, true
+	case 8:
+		return DTypeUint64, true
 	default:
-		return nil, fmt.Errorf("mlx: no data accessor for dtype %v", dt)
+		return 0, false
 	}
 }
 
-// RawBytes returns the array's element storage as a byte slice that aliases
-// MLX's own memory, in the array's native dtype and without copying.
+// rawPointer evaluates the array, reinterprets it as an unsigned integer of the
+// same width, and returns a pointer to its storage.
 //
-// The array is evaluated first: MLX arrays are lazy, and reading the data
-// pointer of an unevaluated array races its evaluation and yields garbage.
-//
-// The returned slice stays valid only while MLX retains the underlying buffer,
-// which Sweep is free to release. Callers must either Pin the array for the
-// lifetime of the slice or copy out of it before the next Sweep. Use Bytes
-// unless the copy is worth avoiding.
-func (t *Array) RawBytes() ([]byte, error) {
-	Eval(t)
+// The returned array is the one that owns the pointer and must stay reachable
+// for as long as the pointer is used.
+func (t *Array) rawPointer() (*Array, unsafe.Pointer, error) {
+	dt := t.DType()
 
-	n := t.NumBytes()
-	if n == 0 {
-		return nil, nil
+	view, ok := byteView(dt.ItemSize())
+	if !ok {
+		return nil, nil, fmt.Errorf("mlx: cannot read bytes of dtype %v", dt)
 	}
 
-	p, err := t.dataPointer()
-	if err != nil {
-		return nil, err
+	v := t
+	if dt != view {
+		v = t.View(view)
+	}
+
+	// MLX is lazy; reading a data pointer before evaluation races the
+	// evaluation and yields garbage.
+	Eval(v)
+
+	var p unsafe.Pointer
+	switch view {
+	case DTypeUint8:
+		p = unsafe.Pointer(C.mlx_array_data_uint8(v.ctx))
+	case DTypeUint16:
+		p = unsafe.Pointer(C.mlx_array_data_uint16(v.ctx))
+	case DTypeUint32:
+		p = unsafe.Pointer(C.mlx_array_data_uint32(v.ctx))
+	case DTypeUint64:
+		p = unsafe.Pointer(C.mlx_array_data_uint64(v.ctx))
 	}
 	if p == nil {
-		return nil, fmt.Errorf("mlx: array %q has no backing storage", t.name)
+		return nil, nil, fmt.Errorf("mlx: array %q has no backing storage", t.name)
 	}
 
-	return unsafe.Slice((*byte)(p), n), nil
+	return v, p, nil
+}
+
+// RawBytes returns the array's element storage as a byte slice aliasing MLX's
+// own memory, in the array's native dtype and without copying.
+//
+// The slice is valid only until release is called, which the caller must do
+// exactly once. Use Bytes unless the copy is genuinely worth avoiding; this
+// exists for the transport path, where a prefill chunk can be megabytes.
+func (t *Array) RawBytes() (data []byte, release func(), err error) {
+	n := t.NumBytes()
+	if n == 0 {
+		return nil, func() {}, nil
+	}
+
+	v, p, err := t.rawPointer()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Pin the owner so a Sweep between here and the caller's release cannot
+	// free the memory the slice points into.
+	Pin(v)
+	return unsafe.Slice((*byte)(p), n), func() { Unpin(v) }, nil
 }
 
 // Bytes returns a copy of the array's element storage in its native dtype.
@@ -120,10 +131,12 @@ func (t *Array) RawBytes() ([]byte, error) {
 // Unlike RawBytes the result has no lifetime tie to MLX, so it survives Sweep
 // and is safe to hand to a writer that outlives the calling frame.
 func (t *Array) Bytes() ([]byte, error) {
-	raw, err := t.RawBytes()
+	raw, release, err := t.RawBytes()
 	if err != nil {
 		return nil, err
 	}
+	defer release()
+
 	if raw == nil {
 		return nil, nil
 	}
