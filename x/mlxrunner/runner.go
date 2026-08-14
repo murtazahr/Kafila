@@ -186,7 +186,21 @@ func loadTensorsFromManifest(root *model.Root) (map[string]*mlx.Array, error) {
 		}
 	}
 
-	// Phase 2: Identify all base names that have .scale tensors and remap them
+	allTensors := normalizeQuantSuffixes(rawTensors)
+
+	slog.Info("Loaded tensors from manifest", "count", len(allTensors))
+	return allTensors, nil
+}
+
+// normalizeQuantSuffixes folds each tensor's companion ".scale" and ".bias"
+// entries into the "_scale" and "_qbias" names the model implementations bind
+// against.
+//
+// Two passes: collect every base name carrying a ".scale" first, then rewrite
+// the rest with complete knowledge of which ones are quantized. Doing it in one
+// pass would let Go's map iteration order decide whether a ".bias" is seen
+// before its sibling ".scale", which changes the name it lands under.
+func normalizeQuantSuffixes(rawTensors map[string]*mlx.Array) map[string]*mlx.Array {
 	scaleBaseNames := make(map[string]bool)
 	allTensors := make(map[string]*mlx.Array, len(rawTensors))
 	for name, arr := range rawTensors {
@@ -197,7 +211,6 @@ func loadTensorsFromManifest(root *model.Root) (map[string]*mlx.Array, error) {
 		}
 	}
 
-	// Phase 3: Process remaining tensors with complete scale knowledge
 	for name, arr := range rawTensors {
 		if strings.HasSuffix(name, ".scale") {
 			continue // already handled
@@ -214,8 +227,7 @@ func loadTensorsFromManifest(root *model.Root) (map[string]*mlx.Array, error) {
 		}
 	}
 
-	slog.Info("Loaded tensors from manifest", "count", len(allTensors))
-	return allTensors, nil
+	return allTensors
 }
 
 func (r *Runner) Run(host, port string, mux http.Handler) error {
