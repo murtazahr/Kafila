@@ -46,7 +46,13 @@ type StageInfo struct {
 	Simulated time.Duration
 }
 
-var _ base.Model = (*RingModel)(nil)
+var (
+	_ base.Model = (*RingModel)(nil)
+
+	// A ring holds cache state on every node, so the runner must be told to
+	// stop reusing prefixes it can only rewind on one of them.
+	_ base.Distributed = (*RingModel)(nil)
+)
 
 // NewRingModel composes the head with the ring it dispatches into.
 func NewRingModel(local *Shard, next *Link, ret *RingReturn, stages []StageInfo) (*RingModel, error) {

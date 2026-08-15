@@ -258,6 +258,56 @@ pinning the whole table to one node depends on interconnect and model shape.
 
 ---
 
+## R11 — Prefix cache reuse across a ring
+
+A single node reuses KV across requests by rewinding its caches to the longest
+prefix a previous request left behind. A ring cannot: the head can only rewind
+the caches in its own process, and the other nodes go on appending.
+
+The failure mode found this way is worth recording, because it is not a crash.
+Rewinding the head while its peers do not leaves them attending over the
+previous request's keys, and what comes back is fluent, confident, and about
+whatever was asked previously. A prompt about one subject was answered on a
+different one entirely, and nothing in any log looked wrong.
+
+**Why research:** reuse across a ring means every node rewinding to the same
+point, which needs an agreed prefix, a way to name it that survives all of them
+independently evicting, and a rewind primitive on cache kinds that cannot all
+rewind. Snapshot-and-restore per node has a memory cost that may exceed what the
+reuse saves. Whether prefix reuse is worth its coordination cost in a split
+deployment is open, and the answer probably depends on how much of a workload's
+prompt is genuinely shared.
+
+**Current behaviour:** a split model resets every node before every request, and
+the runner drops its reuse trie to match. Correct, and it reprocesses prompts a
+single node would not have.
+
+---
+
+## R12 — Where the chat template is applied
+
+The MLX runner is a completion engine: it continues text and knows nothing about
+turns. In the Ollama stack the chat template is applied above it, and for MLX
+models that path is an unimplemented stub, so anything talking to the runner
+directly gets raw continuation. An instruction-tuned model asked "Is X any
+good?" carries on writing the document that question started rather than
+answering it.
+
+The console works around this by writing Qwen3's ChatML out by hand. That is
+fine for one model family and wrong as a design: every caller reimplements the
+same thing, and each gets a different model's format wrong differently.
+
+**Why research:** less a research question than a design one, but it has a real
+constraint attached — the template ships in the checkpoint's
+tokenizer_config.json as Jinja, and the runner has no Jinja engine. Which layer
+should own it, and whether a split deployment changes the answer (the head is
+the only node that sees tokens at all), is worth settling before more callers
+appear.
+
+**Current behaviour:** ChatML hardcoded in the console.
+
+---
+
 ## Answered
 
 *(none yet)*

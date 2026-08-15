@@ -93,6 +93,23 @@ func (r *Runner) TextGenerationPipeline(ctx context.Context, request Request) er
 
 	inputs := request.Tokens
 
+	// A split model holds cache state on every node, and only this process's
+	// share of it is visible here. Reuse across requests rewinds the caches
+	// this process holds; the other nodes would go on appending, and from the
+	// second prompt onward they attend over the previous one's keys. What comes
+	// back is fluent and about the wrong subject.
+	//
+	// So a split model starts every request from empty, everywhere, and the
+	// reuse trie is dropped along with it. That gives up the prefix reuse a
+	// single node gets for free — reusing a prefix across a ring means rewinding
+	// every node to a common point, which is its own problem (R11).
+	if d, ok := r.Model.(base.Distributed); ok {
+		if err := d.Reset(); err != nil {
+			return fmt.Errorf("reset distributed cache state: %w", err)
+		}
+		r.cache.discard()
+	}
+
 	session := r.cache.begin(inputs, request.MediaItems)
 	defer session.close()
 	caches := session.caches

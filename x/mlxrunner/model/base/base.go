@@ -55,6 +55,28 @@ type Sharded interface {
 	SetShard(count int, head, tail bool)
 }
 
+// Distributed is an optional interface for models that keep cache state
+// somewhere other than this process.
+//
+// The runner reuses cache across requests by rewinding the caches it holds to a
+// prefix the previous request left behind. That is sound for a model whose
+// state is entirely here, and wrong for one that is not: rewinding the local
+// caches while the other nodes keep appending leaves them attending over the
+// previous request's keys, and the model answers a question nobody asked. The
+// symptom is a fluent, confident reply on the wrong subject, which is a great
+// deal harder to recognise as a cache bug than a crash would be.
+//
+// A model that implements this is told when a request begins, and is expected
+// to bring every node it owns back to empty. The runner drops its own reuse
+// state to match.
+type Distributed interface {
+	Model
+
+	// Reset clears cache state everywhere, including on nodes this process
+	// does not own. It is called before each request.
+	Reset() error
+}
+
 // DraftModel is an auxiliary model alongside a target that proposes speculative
 // tokens.
 type DraftModel interface {

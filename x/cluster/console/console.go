@@ -1,13 +1,17 @@
 // Package console serves the operations dashboard.
 //
-// The page is one self-contained HTML file with no external assets, because it
-// is served by a laptop that may be presenting from a room with no network. It
-// reads two things: the topology, once, and the span stream, continuously.
+// Everything the page needs to run ships inside the binary: the HTML, Leaflet,
+// and a coastline outline. Only map tiles come from the network, and the page
+// falls back to the embedded outline when they do not arrive. That division is
+// deliberate — the console is served by a laptop that may be presenting from a
+// room with bad wifi, and the failure that matters is the one that takes the
+// centre of the screen with it.
 //
-// Both come from the same source the benchmark reads. A dashboard fed by its
-// own separately-derived numbers would eventually disagree with the measured
-// ones, and the disagreement would stay invisible until someone chased a
-// discrepancy that had been on screen for weeks.
+// It reads two things from the head: the topology, once, and the span stream,
+// continuously. Both come from the same source the benchmark reads. A dashboard
+// fed by its own separately-derived numbers would eventually disagree with the
+// measured ones, and the disagreement would stay invisible until someone chased
+// a discrepancy that had been on screen for weeks.
 package console
 
 import (
@@ -22,17 +26,27 @@ import (
 //go:embed console.html
 var page []byte
 
-// Natural Earth 110m land outline, already projected into the page's viewBox
-// and simplified. Kept as its own asset rather than inlined in the HTML: it is
-// data, and mixing 30 KB of coordinates into a presentation file makes both
-// harder to read.
+// Leaflet 1.9.4, BSD-2-Clause, vendored rather than loaded from a CDN.
 //
-// It ships in the binary rather than coming from a tile provider because the
-// console is served by a machine that may be presenting from a room with no
-// network. A map that silently fails to load would take the centre of the
-// screen with it, and no CDN is worth that.
+// The map plots in latitude and longitude and zooms into real tiles, which a
+// baked outline cannot do: Natural Earth 110m has no borders and no place
+// names, so zooming into it reveals nothing. Leaflet does the projection, so
+// the page never converts a coordinate itself.
 //
-//go:embed land.path
+//go:embed lib/leaflet.js
+var leafletJS []byte
+
+//go:embed lib/leaflet.css
+var leafletCSS []byte
+
+// Natural Earth 110m land outline, public domain, simplified in degrees by
+// scripts/build_worldmap.py. It carries latitude and longitude, not pixels:
+// Leaflet projects it like anything else.
+//
+// It is the fallback basemap. When tiles fail to load the page draws this
+// instead, so a dead network costs detail rather than the whole map.
+//
+//go:embed land.geojson
 var land []byte
 
 // Register adds the dashboard and its event stream to a mux.
@@ -49,11 +63,17 @@ func Register(mux *http.ServeMux, b *trace.Broadcaster, topology http.HandlerFun
 		_, _ = w.Write(page)
 	})
 
-	mux.HandleFunc("GET /assets/land.path", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		_, _ = w.Write(land)
-	})
+	asset := func(contentType string, body []byte) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", contentType)
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			_, _ = w.Write(body)
+		}
+	}
+
+	mux.HandleFunc("GET /assets/land.geojson", asset("application/geo+json", land))
+	mux.HandleFunc("GET /assets/leaflet.js", asset("text/javascript; charset=utf-8", leafletJS))
+	mux.HandleFunc("GET /assets/leaflet.css", asset("text/css; charset=utf-8", leafletCSS))
 
 	mux.HandleFunc("GET /v1/topology", topology)
 	mux.HandleFunc("GET /v1/events", eventStream(b))

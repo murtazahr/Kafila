@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Split Inference Console</title>
+<link rel="stylesheet" href="/assets/leaflet.css">
 <style>
 :root {
   --bg: #161826;
@@ -110,24 +111,46 @@ body {
 
 /* ---------- map ---------- */
 .mapwrap { position: relative; flex: 1; min-height: 0; padding: 0 12px 8px; }
-#map { width: 100%; height: 100%; display: block; }
+#map { width: 100%; height: 100%; background: #12141f; border-radius: 4px; }
 .map-foot { padding: 0 12px 10px; font-family: var(--mono); font-size: 9.5px; color: var(--n700); }
-.land { fill: #262a45; stroke: #3a4066; stroke-width: .6; }
-.arc { fill: none; stroke: #4a4f6b; stroke-width: 1.1; }
-.arc.live { stroke: var(--accent-glow); stroke-width: 1.6; filter: drop-shadow(0 0 4px var(--accent-glow)); }
-.arc.dead { stroke: color-mix(in srgb, var(--fault) 40%, transparent); stroke-dasharray: 3 3; }
-.node-dot { fill: var(--n600); }
+
+/* Leaflet furniture, dressed to match the console. Its own stylesheet is
+   loaded first so these win. */
+.leaflet-container { background: #12141f; font-family: var(--mono); outline: none; }
+.leaflet-control-attribution {
+  background: color-mix(in srgb, var(--panel) 82%, transparent) !important;
+  color: var(--n700) !important; font-size: 8.5px !important;
+}
+.leaflet-control-attribution a { color: var(--n600) !important; }
+.leaflet-bar a {
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border-bottom-color: var(--divider); color: var(--n300);
+}
+.leaflet-bar a:hover { background: var(--panel-2); color: var(--accent-glow); }
+
+/* The tiles are a neutral dark grey. Nudging them toward the accent hue and
+   dimming them keeps the basemap behind the data rather than beside it. */
+.tinted { filter: hue-rotate(198deg) saturate(1.5) brightness(.82) contrast(1.06); }
+
+.land { fill: #262a45; stroke: #3a4066; stroke-width: .7; fill-opacity: 1; }
+.arc { stroke: #565b7d; }
+.arc.live { stroke: var(--accent-glow); filter: drop-shadow(0 0 4px var(--accent-glow)); }
+.arc.dead { stroke: var(--fault); }
+.node-dot { fill: var(--n600); stroke: #12141f; stroke-width: 1.5; }
 .node-dot.busy { fill: var(--accent-glow); }
 .node-dot.dead { fill: var(--fault); }
 .node-ring { fill: none; stroke: var(--accent-glow); opacity: 0; }
 .node-ring.busy { animation: ping 1.1s ease-out infinite; }
-@keyframes ping { 0% { r: 4; opacity: .7; } 100% { r: 15; opacity: 0; } }
-.node-label { font-family: var(--mono); font-size: 9px; fill: var(--n100); }
-.node-leader { stroke: #4a4f6b; stroke-width: .6; }
-.node-meta { font-family: var(--mono); font-size: 7.5px; fill: var(--n600); }
-.node-state { font-family: var(--mono); font-size: 7.5px; fill: var(--accent-glow); letter-spacing: .1em; }
-.node-state.dead { fill: var(--fault); }
-.packet { fill: var(--accent-glow); filter: drop-shadow(0 0 5px var(--accent-glow)); }
+@keyframes ping { 0% { r: 5; opacity: .7; } 100% { r: 17; opacity: 0; } }
+.packet { fill: var(--accent-glow); stroke: none; filter: drop-shadow(0 0 5px var(--accent-glow)); }
+
+/* Labels ride in a divIcon, so they keep their size at every zoom and never
+   need counter-scaling. */
+.node-tag { font-family: var(--mono); line-height: 1.35; white-space: nowrap; pointer-events: none; }
+.node-tag .nm { font-size: 9.5px; color: var(--n100); }
+.node-tag .mt { font-size: 8px; color: var(--n500); }
+.node-tag .st { font-size: 8px; color: var(--accent-glow); letter-spacing: .1em; min-height: 11px; }
+.node-tag .st.dead { color: var(--fault); }
 
 /* ---------- node cards ---------- */
 .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -231,7 +254,9 @@ body {
           <div class="ruler-track" id="ruler"></div>
           <div class="ruler-scale"><span>block 0</span><span id="rulerEnd"></span></div>
         </div>
-        <div class="mapwrap"><svg id="map" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div class="mapwrap">
+          <div id="map"></div>
+        </div>
         <div class="map-foot" id="mapFoot"></div>
       </section>
       <div class="cards" id="cards"></div>
@@ -286,6 +311,7 @@ body {
   </div>
 </div>
 
+<script src="/assets/leaflet.js"></script>
 <script>
 "use strict";
 
@@ -331,11 +357,7 @@ const bytes = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MiB"
 // Topology
 // ---------------------------------------------------------------------------
 async function boot() {
-  const [t, land] = await Promise.all([
-    fetch("/v1/topology").then((r) => r.json()),
-    fetch("/assets/land.path").then((r) => r.text()).catch(() => ""),
-  ]);
-  LAND = land;
+  const t = await fetch("/v1/topology").then((r) => r.json());
   state.topology = t;
   state.nodes = t.nodes.map((n, i) => ({
     ...n,
@@ -441,126 +463,227 @@ function paintCards() {
 // ---------------------------------------------------------------------------
 // Map
 //
-// Actual view puts every node at one point, because that is where they are.
-// Demo view spreads them across the sites above.
+// Leaflet owns projection and zoom. Everything below is expressed in latitude
+// and longitude and handed over; the page never turns a coordinate into a pixel
+// itself. That is the point of using it — the version before this one projected
+// in two places, a Python script and this file, and they drifted into
+// disagreement without anything on screen looking broken.
+//
+// Actual view puts every node where it really is, which is one machine. Demo
+// view spreads them across the sites above, and says so underneath.
 // ---------------------------------------------------------------------------
-const W = 900, H = 420;
 
-// Land outline is fetched rather than inlined: it is data, and the page is
-// presentation. It is served from this binary rather than a tile provider
-// because the console runs on a laptop that may be presenting from a room with
-// no network, and a map that fails to load takes the whole screen with it.
-let LAND = "";
+// CARTO Dark Matter: free, needs no key, and already close to this palette.
+const TILES = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+const TILE_CREDIT =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &middot; ' +
+  '&copy; <a href="https://carto.com/attributions">CARTO</a>';
 
-function project(lat, lon) {
-  const x = (lon + 180) / 360 * W;
-  const φ = Math.max(-75, Math.min(75, lat)) * Math.PI / 180;
-  const y = H / 2 - (W / (2 * Math.PI)) * Math.log(Math.tan(Math.PI / 4 + φ / 2)) * 0.62;
-  return [x, y];
+let map = null;
+let tiles = null;
+let fallbackDrawn = false;
+const marks = new Map();   // node name -> { dot, ring, tag }
+let arcs = [];             // leg i runs from node i to node i+1, last one closes
+let packet = null;
+
+function initMap() {
+  map = L.map("map", {
+    zoomControl: true,
+    attributionControl: true,
+    worldCopyJump: true,
+    minZoom: 1,
+    maxZoom: 12,
+    zoomSnap: 0.25,
+    zoomDelta: 0.5,
+  }).setView([0, 100], 2);
+
+  tiles = L.tileLayer(TILES, {
+    subdomains: "abcd",
+    maxZoom: 12,
+    className: "tinted",
+    attribution: TILE_CREDIT,
+  }).addTo(map);
+
+  // Tiles come from a CDN and this console is presented from rooms with bad
+  // wifi. One failure is enough to fall back: the embedded outline is coarse,
+  // but it is here, and an empty centre panel reads as a broken dashboard
+  // rather than as a missing basemap.
+  tiles.once("tileerror", drawFallbackLand);
+
+  packet = L.circleMarker([0, 0], { radius: 4, className: "packet", interactive: false });
 }
 
-function nodePoint(n, i) {
-  if (state.demo) return project(n.site.lat, n.site.lon);
-  // Actual: all processes on one machine. Fan them out just enough to be
-  // individually clickable, centred on a single site.
-  const [cx, cy] = project(-37.81, 144.96);
-  const spread = (i - (state.nodes.length - 1) / 2) * 58;
-  return [cx + spread, cy - Math.abs(spread) * 0.18];
+async function drawFallbackLand() {
+  if (fallbackDrawn) return;
+  fallbackDrawn = true;
+  if (tiles) { map.removeLayer(tiles); tiles = null; }
+  try {
+    const land = await fetch("/assets/land.geojson").then((r) => r.json());
+    L.geoJSON(land, { className: "land", interactive: false, style: { weight: 0.7 } }).addTo(map);
+    note("basemap tiles unavailable — drawing the embedded outline");
+  } catch {
+    note("basemap unavailable");
+  }
 }
 
-function arcPath(a, b) {
-  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-  const dx = b[0] - a[0], dy = b[1] - a[1];
-  const lift = Math.hypot(dx, dy) * 0.22;
-  return `M${a[0]},${a[1]} Q${mx - dy * 0.14},${my - lift} ${b[0]},${b[1]}`;
+function note(text) {
+  const el = $("mapFoot");
+  if (el) el.innerHTML = `<span style="color:var(--fault)">${escape(text)}</span>`;
+}
+
+// nodeLatLng places a node. In demo view that is its site; in actual view every
+// process is on the one machine, so they are fanned out by a few kilometres to
+// stay individually readable — which the footnote states plainly rather than
+// letting the separation imply a distance that is not there.
+function nodeLatLng(n, i) {
+  if (state.demo) return [n.site.lat, n.site.lon];
+  const spread = i - (state.nodes.length - 1) / 2;
+  return [-37.81 + spread * 0.02, 144.96 + spread * 0.055];
+}
+
+// arcLatLngs bulges a line between two points so that overlapping legs stay
+// distinguishable and the ring reads as a circuit rather than as a scribble.
+function arcLatLngs(a, b, steps = 64) {
+  let dlon = b[1] - a[1];
+  if (dlon > 180) dlon -= 360;         // always take the shorter way round
+  if (dlon < -180) dlon += 360;
+
+  const span = Math.hypot(b[0] - a[0], dlon);
+  const lift = Math.min(span * 0.18, 14);
+
+  const out = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    out.push([
+      a[0] + (b[0] - a[0]) * t + Math.sin(Math.PI * t) * lift,
+      a[1] + dlon * t,
+    ]);
+  }
+  return out;
+}
+
+function tagHTML(n) {
+  const place = state.demo ? `${n.site.city} · ${n.site.region}` : "localhost";
+  return `<div class="node-tag">
+    <div class="nm">${escape(n.name)}</div>
+    <div class="mt">${escape(place)}</div>
+    <div class="mt">${escape(n.blocks)}</div>
+    <div class="st" id="st-${escape(n.name)}"></div>
+  </div>`;
 }
 
 function renderMap() {
-  const svg = $("map");
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  const pts = state.nodes.map(nodePoint);
+  if (!map) initMap();
 
-  let arcs = "";
-  for (let i = 0; i < pts.length - 1; i++) {
-    arcs += `<path class="arc" id="arc-${i}" d="${arcPath(pts[i], pts[i + 1])}"/>`;
-  }
+  marks.forEach((m) => { map.removeLayer(m.dot); map.removeLayer(m.ring); map.removeLayer(m.tag); });
+  marks.clear();
+  arcs.forEach((a) => map.removeLayer(a));
+  arcs = [];
+
+  const pts = state.nodes.map(nodeLatLng);
+
+  // One leg per link, the last of which closes the ring: a frame crosses each
+  // link once and arrives back where it started.
   if (pts.length > 1) {
-    arcs += `<path class="arc" id="arc-return" d="${arcPath(pts[pts.length - 1], pts[0])}"/>`;
+    for (let i = 0; i < pts.length; i++) {
+      const to = (i + 1) % pts.length;
+      arcs.push(L.polyline(arcLatLngs(pts[i], pts[to]), {
+        className: "arc", weight: 1.4, interactive: false,
+      }).addTo(map));
+    }
   }
 
-  const marks = state.nodes.map((n, i) => {
-    const [x, y] = pts[i];
-    // Sites can sit close together — Melbourne and Sydney are a few pixels
-    // apart at this scale — so labels alternate side and stack away from the
-    // dot rather than all landing in the same place.
-    const flip = x > W * 0.7 ? -1 : 1;
-    const up = i % 2 === 0;
-    const tx = x + 12 * flip;
-    const ty = y + (up ? -16 : 14);
-    const anchor = flip === 1 ? "start" : "end";
-    const place = state.demo ? `${n.site.city} · ${n.site.region}` : "localhost";
-    return `<g>
-      <line class="node-leader" x1="${x}" y1="${y}" x2="${tx - 3 * flip}" y2="${ty + (up ? 6 : -4)}"/>
-      <circle class="node-ring" id="ring-${n.name}" cx="${x}" cy="${y}" r="4"/>
-      <circle class="node-dot" id="dot-${n.name}" cx="${x}" cy="${y}" r="3.5"/>
-      <text class="node-label" x="${tx}" y="${ty}" text-anchor="${anchor}">${n.name}</text>
-      <text class="node-meta"  x="${tx}" y="${ty + 9}" text-anchor="${anchor}">${place}</text>
-      <text class="node-meta"  x="${tx}" y="${ty + 18}" text-anchor="${anchor}">${n.blocks}</text>
-      <text class="node-state" id="st-${n.name}" x="${tx}" y="${ty + 27}" text-anchor="${anchor}"></text>
-    </g>`;
-  }).join("");
+  state.nodes.forEach((n, i) => {
+    const at = pts[i];
+    const ring = L.circleMarker(at, { radius: 5, className: "node-ring", interactive: false }).addTo(map);
+    const dot = L.circleMarker(at, { radius: 4.5, className: "node-dot", interactive: false }).addTo(map);
+    const tag = L.marker(at, {
+      interactive: false,
+      icon: L.divIcon({ className: "", html: tagHTML(n), iconSize: [0, 0], iconAnchor: [-9, -2] }),
+    }).addTo(map);
+    marks.set(n.name, { dot, ring, tag });
+  });
 
-  svg.innerHTML = `<path class="land" d="${LAND}"/>${arcs}${marks}
-    <circle class="packet" id="packet" r="3" style="opacity:0"/>`;
+  packet.addTo(map);
+  packet.setStyle({ opacity: 0, fillOpacity: 0 });
+
+  fitNodes(pts);
+  paintMap();
+}
+
+// fitNodes frames the nodes with enough margin that their labels stay on
+// screen; a label clipped by the panel edge looks like a rendering fault.
+function fitNodes(pts) {
+  if (pts.length === 0) return;
+  if (pts.length === 1) { map.setView(pts[0], state.demo ? 5 : 11); return; }
+  map.fitBounds(L.latLngBounds(pts).pad(0.42), { animate: false });
 }
 
 function paintMap() {
   state.nodes.forEach((n) => {
+    const m = marks.get(n.name);
+    if (!m) return;
     const dead = state.unreachable.has(n.name);
     const busy = state.busy.has(n.name) && !dead;
-    const dot = document.getElementById(`dot-${n.name}`);
-    const ring = document.getElementById(`ring-${n.name}`);
+
+    const dotEl = m.dot.getElement(), ringEl = m.ring.getElement();
+    if (dotEl) {
+      dotEl.classList.toggle("busy", busy);
+      dotEl.classList.toggle("dead", dead);
+    }
+    if (ringEl) ringEl.classList.toggle("busy", busy);
+
     const st = document.getElementById(`st-${n.name}`);
-    if (!dot) return;
-    dot.classList.toggle("busy", busy);
-    dot.classList.toggle("dead", dead);
-    ring.classList.toggle("busy", busy);
     if (st) {
       st.textContent = dead ? "UNREACHABLE" : busy ? "COMPUTE" : state.streaming ? "WAIT" : "";
       st.classList.toggle("dead", dead);
     }
   });
+
+  arcs.forEach((a, i) => {
+    const el = a.getElement();
+    if (!el) return;
+    const to = state.nodes[(i + 1) % state.nodes.length];
+    el.classList.toggle("dead", !!to && state.unreachable.has(to.name));
+  });
 }
 
-// Fly a dot along one leg of the ring, over a given duration, so a hop reads as
-// movement rather than as a number changing.
+// flyLeg moves the packet along one leg of the ring over the given duration, so
+// a hop reads as movement rather than as a number changing.
+//
+// The path is the same latitude/longitude polyline that is drawn, so the dot
+// follows the arc wherever the map has been panned or zoomed to.
 function flyLeg(fromIdx, toIdx, dur) {
   return new Promise((resolve) => {
-    const forward = toIdx === fromIdx + 1;
-    const path = forward
-      ? document.getElementById(`arc-${fromIdx}`)
-      : document.getElementById("arc-return");
-    const packet = document.getElementById("packet");
-    if (!path || !packet || !path.getTotalLength) { resolve(); return; }
+    const leg = arcs[fromIdx];
+    if (!leg || !packet || !state.nodes[fromIdx] || !state.nodes[toIdx]) { resolve(); return; }
 
-    if (path.id === "arc-return") path.classList.add("live");
-    else path.classList.add("live");
+    const path = arcLatLngs(
+      nodeLatLng(state.nodes[fromIdx], fromIdx),
+      nodeLatLng(state.nodes[toIdx], toIdx),
+    );
+    const el = leg.getElement();
+    if (el) el.classList.add("live");
 
-    const len = path.getTotalLength();
+    packet.setStyle({ opacity: 1, fillOpacity: 1 });
     const started = performance.now();
-    packet.style.opacity = "1";
 
     function step(now) {
-      let t = (now - started) / dur;
+      const t = (now - started) / dur;
       if (t >= 1) {
-        packet.style.opacity = "0";
-        path.classList.remove("live");
+        packet.setStyle({ opacity: 0, fillOpacity: 0 });
+        if (el) el.classList.remove("live");
         resolve();
         return;
       }
-      const p = path.getPointAtLength(len * (forward ? t : 1 - t));
-      packet.setAttribute("cx", p.x);
-      packet.setAttribute("cy", p.y);
+      // Interpolate between samples so the dot glides rather than stepping.
+      const u = t * (path.length - 1);
+      const i = Math.min(path.length - 2, Math.floor(u));
+      const f = u - i;
+      packet.setLatLng([
+        path[i][0] + (path[i + 1][0] - path[i][0]) * f,
+        path[i][1] + (path[i + 1][1] - path[i][1]) * f,
+      ]);
       requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
@@ -732,7 +855,7 @@ function renderMode() {
   $("modeDemo").setAttribute("aria-pressed", String(state.demo));
   $("mapFoot").innerHTML = state.demo
     ? `<span style="color:var(--accent-glow)">DEMO VIEW</span> · nodes drawn at illustrative sites to show a distributed deployment · all three are processes on one machine`
-    : `actual · three processes on one machine, loopback transport · arcs are the pipeline circuit, not physical routes`;
+    : `actual · three processes on one machine, loopback transport · the nodes are drawn a few km apart only so they can be told apart · arcs are the pipeline circuit, not physical routes`;
   renderMap();
   paint();
 }
@@ -773,7 +896,10 @@ async function send() {
     const res = await fetch("/v1/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ Prompt: text, Options: { num_predict: 96, temperature: 0.7 } }),
+      body: JSON.stringify({
+        Prompt: chatPrompt(text),
+        Options: { num_predict: 220, temperature: 0.7, top_p: 0.8, top_k: 20 },
+      }),
     });
 
     const reader = res.body.getReader();
@@ -799,6 +925,7 @@ async function send() {
       }
     }
     out.innerHTML = escape(acc);
+    history.push({ role: "user", content: text }, { role: "assistant", content: acc.trim() });
   } catch (err) {
     out.innerHTML = `<span style="color:var(--fault)">${escape(String(err))}</span>`;
   } finally {
@@ -806,6 +933,42 @@ async function send() {
     $("chatState").textContent = "ready";
     goIdle();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chat formatting
+//
+// The runner is a completion engine: it continues text and knows nothing about
+// turns. Instruction-tuned models only behave like assistants when the prompt
+// is wrapped in the format they were tuned on, and without that wrapping Qwen3
+// does what it was asked to do -- carry on writing the document that began with
+// your question. That is the difference between "Is Unimelb any good?" being
+// answered and it being continued into a list of related questions.
+//
+// In the whole Ollama stack this wrapping is applied above the runner, from the
+// template the model ships with. The MLX runner does not implement that path
+// (Client.ApplyChatTemplate is an explicit stub), so the console does it here.
+// It is Qwen3's ChatML written out by hand, which is fine for one model family
+// and is the reason R12 exists: the template ships in the checkpoint's
+// tokenizer_config.json as Jinja, and the runner should apply it rather than
+// having every caller reimplement it.
+const SYSTEM = "You are a helpful assistant. Answer clearly and concisely.";
+
+// Turns already completed, so the model can follow a conversation rather than
+// answering each message cold. Cache reuse cannot span a ring yet, so every
+// request reprocesses this from the start -- see R11.
+const history = [];
+
+function chatPrompt(text) {
+  const turns = [{ role: "system", content: SYSTEM }, ...history, { role: "user", content: text }];
+  let out = "";
+  for (const t of turns) {
+    out += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
+  }
+  // Qwen3 reasons inside <think> blocks when invited to. An empty one tells it
+  // the thinking is done, which keeps a 0.6B model from spending the whole
+  // token budget talking to itself before it answers.
+  return out + "<|im_start|>assistant\n<think>\n\n</think>\n\n";
 }
 
 function escape(s) {
