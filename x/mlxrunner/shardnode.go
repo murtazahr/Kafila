@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/x/cluster/agent"
+	"github.com/ollama/ollama/x/cluster/console"
 	"github.com/ollama/ollama/x/cluster/trace"
 	"github.com/ollama/ollama/x/mlxrunner/mlx"
 	"github.com/ollama/ollama/x/mlxrunner/model"
@@ -172,14 +174,21 @@ func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
 		return err
 	}
 
+	// One stream feeds the durable trace and the live console. A dashboard on
+	// a separately-derived feed would eventually disagree with the benchmark,
+	// and the disagreement would stay invisible.
+	events := trace.NewBroadcaster()
+	var sink io.Writer = events
+
 	if tracePath != "" {
 		f, err := os.OpenFile(tracePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			return fmt.Errorf("open trace: %w", err)
 		}
 		defer f.Close()
-		pipeline.Trace(trace.NewRecorder(f, "pipeline", "head", spec.Blocks))
+		sink = io.MultiWriter(f, events)
 	}
+	pipeline.Trace(trace.NewRecorder(sink, "pipeline", "head", spec.Blocks))
 
 	// Every stage must start from the same offset, or their positions have
 	// already drifted before a single token is processed.
@@ -206,12 +215,14 @@ func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
 	mux := runner.newMux(func() uint64 {
 		return uint64(mlx.ActiveMemory() + mlx.CacheMemory())
 	})
-	mux.HandleFunc("GET /v1/topology", func(w http.ResponseWriter, r *http.Request) {
+	console.Register(mux, events, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(describeTopology(pipeline, spec)); err != nil {
 			slog.Error("encode topology", "error", err)
 		}
 	})
+
+	slog.Info("console ready", "url", fmt.Sprintf("http://127.0.0.1:%d/", port))
 
 	return runner.Run("127.0.0.1", strconv.Itoa(port), mux)
 }

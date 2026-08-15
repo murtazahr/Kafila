@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Split Inference Console</title>
+<style>
+:root {
+  --bg: #161826;
+  --panel: #1b1d2e;
+  --panel-2: #1f2134;
+  --accent: #9184d9;
+  --accent-dim: #5d5294;
+  --accent-glow: #b5abfc;
+  --fault: #ff8a80;
+  --ok: #7fd1a8;
+  --n100: #f3f5fe;
+  --n300: #cfd3e5;
+  --n400: #b2b6ca;
+  --n500: #9397ab;
+  --n600: #75798c;
+  --n700: #595d6c;
+  --n800: #3f424d;
+  --divider: color-mix(in srgb, #e9e9ed 14%, transparent);
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--n300);
+  font-family: var(--sans); font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+.mono { font-family: var(--mono); }
+.dim { color: var(--n600); }
+
+/* ---------- shell ---------- */
+#app { display: grid; grid-template-rows: auto 1fr; height: 100%; gap: 10px; padding: 12px; }
+.masthead { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 24px; }
+.brand-kicker {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .22em;
+  text-transform: uppercase; color: var(--n600); margin-bottom: 3px;
+}
+.brand-model { font-family: var(--mono); font-size: 25px; color: var(--n100); letter-spacing: -.02em; }
+.brand-sub { font-family: var(--mono); font-size: 10.5px; color: var(--n600); margin-left: 10px; }
+
+.modes { display: flex; align-items: center; gap: 6px; justify-self: center; }
+.modes-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--n700); margin-right: 4px; }
+.chip {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  padding: 5px 11px; border: 1px solid var(--n800); border-radius: 3px;
+  background: transparent; color: var(--n500); cursor: pointer;
+}
+.chip[aria-pressed="true"] { border-color: var(--accent); color: var(--n100); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.rate { text-align: right; }
+.rate-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--n600); }
+.rate-value { font-family: var(--mono); font-size: 40px; line-height: 1; color: var(--accent-glow); font-variant-numeric: tabular-nums; }
+.rate-sub { font-family: var(--mono); font-size: 10px; color: var(--n600); }
+
+/* ---------- layout ---------- */
+.grid { display: grid; grid-template-columns: 280px 1fr 250px; gap: 10px; min-height: 0; }
+.col { display: grid; gap: 10px; min-height: 0; }
+.col-mid { grid-template-rows: 1fr auto; }
+.col-right { grid-template-rows: auto auto 1fr; }
+
+.panel { background: var(--panel); border: 1px solid var(--divider); border-radius: 5px; display: flex; flex-direction: column; min-height: 0; }
+.panel-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 9px 12px; border-bottom: 1px solid var(--divider);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .17em; text-transform: uppercase; color: var(--n500);
+}
+.panel-head .note { letter-spacing: .04em; text-transform: none; color: var(--n700); font-size: 10px; }
+.panel-body { padding: 12px; overflow: auto; min-height: 0; }
+
+/* ---------- chat ---------- */
+.chat-log { display: flex; flex-direction: column; gap: 14px; }
+.turn-label { font-family: var(--mono); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--n700); margin-bottom: 5px; }
+.turn-text { font-size: 12.5px; line-height: 1.55; color: var(--n300); border-left: 2px solid var(--n800); padding-left: 10px; white-space: pre-wrap; }
+.turn-text.out { border-left-color: var(--accent); color: var(--n100); }
+.caret { display: inline-block; width: 6px; height: 13px; background: var(--accent-glow); vertical-align: -2px; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.chat-foot { padding: 10px 12px; border-top: 1px solid var(--divider); display: flex; gap: 8px; }
+.chat-foot input {
+  flex: 1; background: var(--panel-2); border: 1px solid var(--n800); border-radius: 3px;
+  color: var(--n100); padding: 7px 9px; font-family: var(--sans); font-size: 12px;
+}
+.chat-foot input:focus { outline: none; border-color: var(--accent-dim); }
+.chat-foot button {
+  background: color-mix(in srgb, var(--accent) 20%, transparent); border: 1px solid var(--accent-dim);
+  color: var(--n100); border-radius: 3px; padding: 7px 13px; cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+}
+.chat-foot button:disabled { opacity: .4; cursor: default; }
+
+/* ---------- block ruler ---------- */
+.ruler { padding: 10px 12px 4px; }
+.ruler-track { display: flex; gap: 2px; height: 18px; }
+.ruler-seg { display: flex; gap: 1.5px; }
+.blk { width: 5px; border-radius: 1px; background: var(--n800); transition: background .18s, box-shadow .18s; }
+.blk.n0 { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.blk.n1 { background: color-mix(in srgb, var(--accent) 38%, transparent); }
+.blk.n2 { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.blk.hot { background: var(--accent-glow); box-shadow: 0 0 7px var(--accent-glow); }
+.blk.dead { background: color-mix(in srgb, var(--fault) 30%, transparent); }
+.ruler-scale { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--n700); margin-top: 5px; }
+
+/* ---------- map ---------- */
+.mapwrap { position: relative; flex: 1; min-height: 0; padding: 0 12px 8px; }
+#map { width: 100%; height: 100%; display: block; }
+.map-foot { padding: 0 12px 10px; font-family: var(--mono); font-size: 9.5px; color: var(--n700); }
+.land { fill: #262a45; stroke: #3a4066; stroke-width: .6; }
+.arc { fill: none; stroke: #4a4f6b; stroke-width: 1.1; }
+.arc.live { stroke: var(--accent-glow); stroke-width: 1.6; filter: drop-shadow(0 0 4px var(--accent-glow)); }
+.arc.dead { stroke: color-mix(in srgb, var(--fault) 40%, transparent); stroke-dasharray: 3 3; }
+.node-dot { fill: var(--n600); }
+.node-dot.busy { fill: var(--accent-glow); }
+.node-dot.dead { fill: var(--fault); }
+.node-ring { fill: none; stroke: var(--accent-glow); opacity: 0; }
+.node-ring.busy { animation: ping 1.1s ease-out infinite; }
+@keyframes ping { 0% { r: 4; opacity: .7; } 100% { r: 15; opacity: 0; } }
+.node-label { font-family: var(--mono); font-size: 9px; fill: var(--n100); }
+.node-leader { stroke: #4a4f6b; stroke-width: .6; }
+.node-meta { font-family: var(--mono); font-size: 7.5px; fill: var(--n600); }
+.node-state { font-family: var(--mono); font-size: 7.5px; fill: var(--accent-glow); letter-spacing: .1em; }
+.node-state.dead { fill: var(--fault); }
+.packet { fill: var(--accent-glow); filter: drop-shadow(0 0 5px var(--accent-glow)); }
+
+/* ---------- node cards ---------- */
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--divider); border-radius: 5px; padding: 11px 12px; position: relative; overflow: hidden; }
+.card.busy { border-color: var(--accent-dim); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
+.card.dead { border-color: color-mix(in srgb, var(--fault) 45%, transparent); }
+.card.dead .card-blocks, .card.dead .card-name { color: var(--n700); }
+.card.dead::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in srgb, var(--fault) 7%, transparent) 3px 4px);
+}
+.card-top { display: flex; justify-content: space-between; align-items: baseline; }
+.card-name { font-family: var(--mono); font-size: 14px; color: var(--n100); }
+.card-addr { font-family: var(--mono); font-size: 8.5px; color: var(--n700); }
+.card-blocks { font-family: var(--mono); font-size: 21px; color: var(--accent-glow); margin: 5px 0 8px; letter-spacing: -.01em; }
+.card-owns { font-family: var(--mono); font-size: 9.5px; color: var(--n600); line-height: 1.7; }
+.card-mem { margin-top: 9px; }
+.mem-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--n600); }
+.mem-bar { height: 3px; background: var(--n800); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.mem-fill { height: 100%; background: var(--accent-dim); }
+.card-state { margin-top: 9px; font-family: var(--mono); font-size: 9px; letter-spacing: .13em; color: var(--n600); display: flex; align-items: center; gap: 5px; }
+.card-state .led { width: 5px; height: 5px; border-radius: 50%; background: var(--n700); }
+.card.busy .card-state { color: var(--accent-glow); }
+.card.busy .led { background: var(--accent-glow); box-shadow: 0 0 6px var(--accent-glow); }
+.card.dead .card-state { color: var(--fault); }
+.card.dead .led { background: var(--fault); }
+
+/* ---------- metrics ---------- */
+.metric { margin-bottom: 13px; }
+.metric:last-child { margin-bottom: 0; }
+.metric-label { font-family: var(--mono); font-size: 8.5px; letter-spacing: .17em; text-transform: uppercase; color: var(--n700); }
+.metric-value { font-family: var(--mono); font-size: 20px; color: var(--n100); font-variant-numeric: tabular-nums; }
+.metric-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.bar-row { margin-bottom: 9px; }
+.bar-top { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9.5px; color: var(--n500); margin-bottom: 4px; }
+.bar-top b { color: var(--n100); font-weight: 400; }
+.bar { height: 5px; background: var(--n800); border-radius: 3px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s; }
+.bar-fill.ghost { background: var(--n700); }
+
+.events { font-family: var(--mono); font-size: 9.5px; line-height: 1.85; }
+.ev { display: grid; grid-template-columns: 44px 1fr; gap: 7px; color: var(--n600); }
+.ev b { color: var(--n300); font-weight: 400; }
+.ev.warn b { color: var(--fault); }
+
+.banner {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  padding: 6px 12px; border-radius: 3px; text-align: center;
+}
+.banner.demo { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent-glow); border: 1px solid var(--accent-dim); }
+.banner.real { background: transparent; color: var(--n700); border: 1px solid var(--divider); }
+.offline { color: var(--fault); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="masthead">
+    <div>
+      <div class="brand-kicker">Split Inference · Pipeline</div>
+      <div><span class="brand-model" id="model">—</span><span class="brand-sub" id="modelSub"></span></div>
+    </div>
+
+    <div class="modes">
+      <span class="modes-label">View</span>
+      <button class="chip" id="modeReal" aria-pressed="true">Actual</button>
+      <button class="chip" id="modeDemo" aria-pressed="false">Demo</button>
+    </div>
+
+    <div class="rate">
+      <div class="rate-label">Tokens / sec</div>
+      <div class="rate-value" id="tps">—</div>
+      <div class="rate-sub"><span id="reach">—</span> · <span id="phase">idle</span></div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- chat -->
+    <div class="col">
+      <section class="panel">
+        <div class="panel-head"><span>Chat</span><span class="note" id="chatState">ready</span></div>
+        <div class="panel-body chat-log" id="chatLog"></div>
+        <div class="chat-foot">
+          <input id="prompt" placeholder="Send a message…" autocomplete="off">
+          <button id="send">Send</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- topology -->
+    <div class="col col-mid">
+      <section class="panel">
+        <div class="panel-head">
+          <span id="topoTitle">Topology</span>
+          <span class="note" id="topoNote"></span>
+        </div>
+        <div class="ruler">
+          <div class="ruler-track" id="ruler"></div>
+          <div class="ruler-scale"><span>block 0</span><span id="rulerEnd"></span></div>
+        </div>
+        <div class="mapwrap"><svg id="map" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div class="map-foot" id="mapFoot"></div>
+      </section>
+      <div class="cards" id="cards"></div>
+    </div>
+
+    <!-- metrics -->
+    <div class="col col-right">
+      <section class="panel">
+        <div class="panel-head"><span>Throughput</span></div>
+        <div class="panel-body">
+          <div class="bar-row">
+            <div class="bar-top"><span id="splitLabel">split</span><b id="splitTps">—</b></div>
+            <div class="bar"><div class="bar-fill" id="splitBar" style="width:0%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-top"><span>single node</span><b id="baseTps">94.94 tok/s</b></div>
+            <div class="bar"><div class="bar-fill ghost" style="width:100%"></div></div>
+          </div>
+          <div class="metric-label" style="margin-top:10px" id="hopSummary">—</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><span>This request</span></div>
+        <div class="panel-body">
+          <div class="metric-pair">
+            <div class="metric"><div class="metric-label">Tokens</div><div class="metric-value" id="mTokens">0</div></div>
+            <div class="metric"><div class="metric-label">Hops</div><div class="metric-value" id="mHops">0</div></div>
+          </div>
+          <div class="metric-pair">
+            <div class="metric"><div class="metric-label">Bytes moved</div><div class="metric-value" id="mBytes">0 B</div></div>
+            <div class="metric"><div class="metric-label">Payload / hop</div><div class="metric-value" id="mPayload">—</div></div>
+          </div>
+          <div class="metric-pair">
+            <div class="metric"><div class="metric-label">Hop round trip</div><div class="metric-value" id="mRtt">—</div></div>
+            <div class="metric"><div class="metric-label">In flight</div><div class="metric-value" id="mFlight">—</div></div>
+          </div>
+          <div class="metric-label" style="margin-top:4px" id="flightNote">round trip less the receiver's own reported time</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><span>Events</span><span class="note" id="link">connecting</span></div>
+        <div class="panel-body events" id="events"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Two views of the same cluster.
+//
+// "Actual" reports where the nodes really are. Today all three are processes on
+// one machine, so it says so rather than implying otherwise.
+//
+// "Demo" places them in three cities to show what the same pipeline looks like
+// once the nodes are genuinely distributed. It is an illustration of the target
+// architecture, and it is labelled as one on screen, because an audience
+// reading three continents off a map deserves to know which of the two they
+// are looking at.
+// ---------------------------------------------------------------------------
+const DEMO_SITES = [
+  { city: "Melbourne", region: "AU-VIC", lat: -37.81, lon: 144.96 },
+  { city: "Sydney",    region: "AU-NSW", lat: -33.87, lon: 151.21 },
+  { city: "Mumbai",    region: "IN-MH",  lat:  19.08, lon:  72.88 },
+];
+
+const state = {
+  demo: false,
+  topology: null,
+  nodes: [],
+  phase: "idle",
+  busy: new Set(),
+  unreachable: new Set(),
+  tokens: 0, hops: 0, bytes: 0,
+  lastPayload: 0, lastRtt: 0, lastFlight: 0,
+  tps: null,
+  events: [],
+  streaming: false,
+};
+
+const $ = (id) => document.getElementById(id);
+const ns = (n) => n / 1e6 >= 1 ? (n / 1e6).toFixed(1) + " ms" : (n / 1e3).toFixed(0) + " µs";
+const bytes = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MiB"
+                   : n >= 1024 ? (n / 1024).toFixed(1) + " KiB" : n + " B";
+
+// ---------------------------------------------------------------------------
+// Topology
+// ---------------------------------------------------------------------------
+async function boot() {
+  const [t, land] = await Promise.all([
+    fetch("/v1/topology").then((r) => r.json()),
+    fetch("/assets/land.path").then((r) => r.text()).catch(() => ""),
+  ]);
+  LAND = land;
+  state.topology = t;
+  state.nodes = t.nodes.map((n, i) => ({
+    ...n,
+    site: DEMO_SITES[i % DEMO_SITES.length],
+    start: n.start ?? parseRange(n.blocks)[0],
+    end: n.end ?? parseRange(n.blocks)[1],
+  }));
+
+  $("model").textContent = t.model;
+  $("modelSub").textContent = `${t.blocks} blocks · ${t.tied ? "tied embeddings" : "untied"} · ${t.stage_count} stages`;
+  $("rulerEnd").textContent = (t.blocks - 1);
+  $("splitLabel").textContent = `split, ${t.stage_count} nodes`;
+  $("topoTitle").textContent = `Topology · ${t.blocks} blocks across ${t.stage_count} processes`;
+
+  renderRuler();
+  renderCards();
+  renderMap();
+  renderMode();
+}
+
+function parseRange(s) {
+  const m = /\[(\d+),(\d+)\)/.exec(s || "");
+  return m ? [ +m[1], +m[2] ] : [0, 0];
+}
+
+// ---------------------------------------------------------------------------
+// Block ruler — one tick per transformer block, grouped by owner
+// ---------------------------------------------------------------------------
+function renderRuler() {
+  const track = $("ruler");
+  track.innerHTML = "";
+  state.nodes.forEach((n, i) => {
+    const seg = document.createElement("div");
+    seg.className = "ruler-seg";
+    for (let b = n.start; b < n.end; b++) {
+      const d = document.createElement("div");
+      d.className = `blk n${i % 3}`;
+      d.dataset.node = n.name;
+      seg.appendChild(d);
+    }
+    track.appendChild(seg);
+  });
+}
+
+function paintRuler() {
+  document.querySelectorAll("#ruler .blk").forEach((d) => {
+    d.classList.toggle("hot", state.busy.has(d.dataset.node));
+    d.classList.toggle("dead", state.unreachable.has(d.dataset.node));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Node cards
+// ---------------------------------------------------------------------------
+const OWNS = {
+  head: ["+ embedding table", "+ output projection", "+ sampler"],
+  tail: ["+ final norm"],
+  "head+tail": ["+ embedding table", "+ output projection", "+ sampler", "+ final norm"],
+  middle: ["blocks only"],
+};
+
+function renderCards() {
+  const el = $("cards");
+  el.innerHTML = "";
+  el.style.gridTemplateColumns = `repeat(${state.nodes.length}, 1fr)`;
+
+  state.nodes.forEach((n) => {
+    const owns = OWNS[n.role] || OWNS.middle;
+    const card = document.createElement("div");
+    card.className = "card";
+    card.id = `card-${n.name}`;
+    card.innerHTML = `
+      <div class="card-top">
+        <span class="card-name">${n.name}</span>
+        <span class="card-addr" data-addr>${n.address}</span>
+      </div>
+      <div class="card-blocks">${n.blocks}</div>
+      <div class="card-owns">${owns.join("<br>")}</div>
+      <div class="card-mem">
+        <div class="mem-row"><span>resident</span><span data-mem>—</span></div>
+        <div class="mem-bar"><div class="mem-fill" data-membar style="width:0%"></div></div>
+      </div>
+      <div class="card-state"><span class="led"></span><span data-state>idle</span></div>`;
+    el.appendChild(card);
+  });
+}
+
+function paintCards() {
+  state.nodes.forEach((n) => {
+    const card = $(`card-${n.name}`);
+    if (!card) return;
+    const dead = state.unreachable.has(n.name);
+    const busy = state.busy.has(n.name);
+    card.classList.toggle("busy", busy && !dead);
+    card.classList.toggle("dead", dead);
+    card.querySelector("[data-state]").textContent =
+      dead ? "unreachable" : busy ? "compute" : state.streaming ? "wait" : "idle";
+    card.querySelector("[data-addr]").textContent =
+      state.demo ? `${n.site.city} · ${n.site.region}` : n.address;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Map
+//
+// Actual view puts every node at one point, because that is where they are.
+// Demo view spreads them across the sites above.
+// ---------------------------------------------------------------------------
+const W = 900, H = 420;
+
+// Land outline is fetched rather than inlined: it is data, and the page is
+// presentation. It is served from this binary rather than a tile provider
+// because the console runs on a laptop that may be presenting from a room with
+// no network, and a map that fails to load takes the whole screen with it.
+let LAND = "";
+
+function project(lat, lon) {
+  const x = (lon + 180) / 360 * W;
+  const φ = Math.max(-75, Math.min(75, lat)) * Math.PI / 180;
+  const y = H / 2 - (W / (2 * Math.PI)) * Math.log(Math.tan(Math.PI / 4 + φ / 2)) * 0.62;
+  return [x, y];
+}
+
+function nodePoint(n, i) {
+  if (state.demo) return project(n.site.lat, n.site.lon);
+  // Actual: all processes on one machine. Fan them out just enough to be
+  // individually clickable, centred on a single site.
+  const [cx, cy] = project(-37.81, 144.96);
+  const spread = (i - (state.nodes.length - 1) / 2) * 58;
+  return [cx + spread, cy - Math.abs(spread) * 0.18];
+}
+
+function arcPath(a, b) {
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const lift = Math.hypot(dx, dy) * 0.22;
+  return `M${a[0]},${a[1]} Q${mx - dy * 0.14},${my - lift} ${b[0]},${b[1]}`;
+}
+
+function renderMap() {
+  const svg = $("map");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const pts = state.nodes.map(nodePoint);
+
+  let arcs = "";
+  for (let i = 0; i < pts.length - 1; i++) {
+    arcs += `<path class="arc" id="arc-${i}" d="${arcPath(pts[i], pts[i + 1])}"/>`;
+  }
+  if (pts.length > 1) {
+    arcs += `<path class="arc" id="arc-return" d="${arcPath(pts[pts.length - 1], pts[0])}" stroke-dasharray="2 4"/>`;
+  }
+
+  const marks = state.nodes.map((n, i) => {
+    const [x, y] = pts[i];
+    // Sites can sit close together — Melbourne and Sydney are a few pixels
+    // apart at this scale — so labels alternate side and stack away from the
+    // dot rather than all landing in the same place.
+    const flip = x > W * 0.7 ? -1 : 1;
+    const up = i % 2 === 0;
+    const tx = x + 12 * flip;
+    const ty = y + (up ? -16 : 14);
+    const anchor = flip === 1 ? "start" : "end";
+    const place = state.demo ? `${n.site.city} · ${n.site.region}` : "localhost";
+    return `<g>
+      <line class="node-leader" x1="${x}" y1="${y}" x2="${tx - 3 * flip}" y2="${ty + (up ? 6 : -4)}"/>
+      <circle class="node-ring" id="ring-${n.name}" cx="${x}" cy="${y}" r="4"/>
+      <circle class="node-dot" id="dot-${n.name}" cx="${x}" cy="${y}" r="3.5"/>
+      <text class="node-label" x="${tx}" y="${ty}" text-anchor="${anchor}">${n.name}</text>
+      <text class="node-meta"  x="${tx}" y="${ty + 9}" text-anchor="${anchor}">${place}</text>
+      <text class="node-meta"  x="${tx}" y="${ty + 18}" text-anchor="${anchor}">${n.blocks}</text>
+      <text class="node-state" id="st-${n.name}" x="${tx}" y="${ty + 27}" text-anchor="${anchor}"></text>
+    </g>`;
+  }).join("");
+
+  svg.innerHTML = `<path class="land" d="${LAND}"/>${arcs}${marks}
+    <circle class="packet" id="packet" r="3" style="opacity:0"/>`;
+}
+
+function paintMap() {
+  state.nodes.forEach((n) => {
+    const dead = state.unreachable.has(n.name);
+    const busy = state.busy.has(n.name) && !dead;
+    const dot = document.getElementById(`dot-${n.name}`);
+    const ring = document.getElementById(`ring-${n.name}`);
+    const st = document.getElementById(`st-${n.name}`);
+    if (!dot) return;
+    dot.classList.toggle("busy", busy);
+    dot.classList.toggle("dead", dead);
+    ring.classList.toggle("busy", busy);
+    if (st) {
+      st.textContent = dead ? "UNREACHABLE" : busy ? "COMPUTE" : state.streaming ? "WAIT" : "";
+      st.classList.toggle("dead", dead);
+    }
+  });
+}
+
+// Fly a dot along the arc between two stages, so a hop is visible as movement
+// rather than as a number changing.
+function flyPacket(fromIdx, toIdx) {
+  const svg = $("map");
+  const path = fromIdx < toIdx
+    ? document.getElementById(`arc-${fromIdx}`)
+    : document.getElementById("arc-return");
+  const packet = document.getElementById("packet");
+  if (!path || !packet || !path.getTotalLength) return;
+
+  const len = path.getTotalLength();
+  const started = performance.now();
+  const dur = 320;
+  packet.style.opacity = "1";
+
+  function step(now) {
+    let t = (now - started) / dur;
+    if (t >= 1) { packet.style.opacity = "0"; return; }
+    if (fromIdx > toIdx) t = 1 - t;           // return leg runs backwards
+    const p = path.getPointAtLength(len * t);
+    packet.setAttribute("cx", p.x);
+    packet.setAttribute("cy", p.y);
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ---------------------------------------------------------------------------
+// Live stream
+// ---------------------------------------------------------------------------
+let decodeTimes = [];
+
+function connect() {
+  const es = new EventSource("/v1/events");
+
+  es.onopen = () => { $("link").textContent = "live"; $("link").classList.remove("offline"); };
+  es.onerror = () => { $("link").textContent = "reconnecting"; $("link").classList.add("offline"); };
+
+  es.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    ev.type === "hop" ? onHop(ev) : onSpan(ev);
+    paint();
+  };
+}
+
+function indexOfNode(name) {
+  return state.nodes.findIndex((n) => n.name === name);
+}
+
+function onHop(h) {
+  if (h.phase === "align") {
+    pushEvent(h.to, "align", false);
+    return;
+  }
+
+  state.hops++;
+  state.bytes += h.bytes || 0;
+  state.lastPayload = h.bytes || state.lastPayload;
+  state.lastRtt = h.round_trip_ns || 0;
+  state.lastFlight = Math.max(0, (h.round_trip_ns || 0) - (h.remote_duration_ns || 0));
+  state.phase = h.phase;
+  state.streaming = true;
+
+  const from = indexOfNode(h.from), to = indexOfNode(h.to);
+  if (from >= 0 && to >= 0) flyPacket(from, to);
+
+  // Decode is one node at a time; prefill may have several going at once.
+  if (h.phase === "decode") state.busy = new Set([h.to]);
+  else state.busy.add(h.to);
+
+  state.unreachable.delete(h.to);
+  clearTimeout(state.idleTimer);
+  state.idleTimer = setTimeout(goIdle, 1200);
+}
+
+function onSpan(s) {
+  if (s.phase === "decode" && s.token >= 0 && s.kind === "compute") {
+    state.tokens = Math.max(state.tokens, s.token + 1);
+    const now = performance.now();
+    decodeTimes.push(now);
+    decodeTimes = decodeTimes.filter((t) => now - t < 4000);
+    if (decodeTimes.length > 2) {
+      const span = (decodeTimes.at(-1) - decodeTimes[0]) / 1000;
+      state.tps = span > 0 ? (decodeTimes.length - 1) / span : null;
+    }
+  }
+  if (s.phase === "prefill") state.phase = "prefill";
+  if (s.note && s.note.includes("diverged")) pushEvent("cluster", "cache flush", true);
+}
+
+function goIdle() {
+  state.busy.clear();
+  state.streaming = false;
+  state.phase = "idle";
+  paint();
+}
+
+function pushEvent(who, what, warn) {
+  state.events.unshift({ who, what, warn });
+  state.events = state.events.slice(0, 12);
+}
+
+// ---------------------------------------------------------------------------
+// Paint
+// ---------------------------------------------------------------------------
+function paint() {
+  $("tps").textContent = state.tps ? state.tps.toFixed(1) : "—";
+  $("phase").textContent = `phase = ${state.phase}`;
+
+  const reachable = state.nodes.length - state.unreachable.size;
+  $("reach").textContent = `${reachable} / ${state.nodes.length} nodes reachable`;
+
+  $("mTokens").textContent = state.tokens;
+  $("mHops").textContent = state.hops;
+  $("mBytes").textContent = bytes(state.bytes);
+  $("mPayload").textContent = state.lastPayload ? bytes(state.lastPayload) : "—";
+  $("mRtt").textContent = state.lastRtt ? ns(state.lastRtt) : "—";
+  $("mFlight").textContent = state.lastFlight ? ns(state.lastFlight) : "—";
+
+  const base = 94.94;
+  const split = state.tps || 0;
+  $("splitTps").textContent = split ? `${split.toFixed(2)} tok/s` : "—";
+  $("splitBar").style.width = `${Math.min(100, split / base * 100)}%`;
+  $("hopSummary").textContent = state.hops
+    ? `${state.hops} hops · ${bytes(state.bytes)} moved`
+    : "awaiting first request";
+
+  $("topoNote").textContent = state.phase === "prefill"
+    ? "prefill · stages overlap, all may compute at once"
+    : state.phase === "decode"
+      ? "decode · strict turn-taking, one node at a time"
+      : "idle";
+
+  $("events").innerHTML = state.events.map((e) =>
+    `<div class="ev${e.warn ? " warn" : ""}"><span>${e.who}</span><b>${e.what}</b></div>`).join("")
+    || `<div class="ev"><span>—</span><b>no events</b></div>`;
+
+  paintRuler();
+  paintCards();
+  paintMap();
+}
+
+// ---------------------------------------------------------------------------
+// Mode
+// ---------------------------------------------------------------------------
+function renderMode() {
+  $("modeReal").setAttribute("aria-pressed", String(!state.demo));
+  $("modeDemo").setAttribute("aria-pressed", String(state.demo));
+  $("mapFoot").innerHTML = state.demo
+    ? `<span style="color:var(--accent-glow)">DEMO VIEW</span> · nodes drawn at illustrative sites to show a distributed deployment · all three are processes on one machine`
+    : `actual · three processes on one machine, loopback transport · arcs are the pipeline circuit, not physical routes`;
+  renderMap();
+  paint();
+}
+
+$("modeReal").onclick = () => { state.demo = false; renderMode(); };
+$("modeDemo").onclick = () => { state.demo = true; renderMode(); };
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+const log = $("chatLog");
+
+function addTurn(label, cls) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `<div class="turn-label">${label}</div><div class="turn-text ${cls}"></div>`;
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+  return wrap.querySelector(".turn-text");
+}
+
+async function send() {
+  const input = $("prompt");
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.value = "";
+  $("send").disabled = true;
+  $("chatState").textContent = "streaming";
+
+  addTurn("Prompt", "").textContent = text;
+  const out = addTurn("Completion", "out");
+  out.innerHTML = '<span class="caret"></span>';
+
+  state.tokens = 0; state.hops = 0; state.bytes = 0;
+  decodeTimes = [];
+
+  try {
+    const res = await fetch("/v1/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ Prompt: text, Options: { num_predict: 96, temperature: 0.7 } }),
+    });
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", acc = "";
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const d = JSON.parse(line);
+          if (d.Content) {
+            acc += d.Content;
+            out.innerHTML = escape(acc) + '<span class="caret"></span>';
+            log.scrollTop = log.scrollHeight;
+          }
+        } catch {}
+      }
+    }
+    out.innerHTML = escape(acc);
+  } catch (err) {
+    out.innerHTML = `<span style="color:var(--fault)">${escape(String(err))}</span>`;
+  } finally {
+    $("send").disabled = false;
+    $("chatState").textContent = "ready";
+    goIdle();
+  }
+}
+
+function escape(s) {
+  return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+$("send").onclick = send;
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+// ---------------------------------------------------------------------------
+boot().then(connect).catch((e) => {
+  $("link").textContent = "no cluster";
+  $("link").classList.add("offline");
+  console.error(e);
+});
+</script>
+</body>
+</html>
