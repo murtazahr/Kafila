@@ -70,7 +70,7 @@ func TestShardLoadMemory(t *testing.T) {
 	measure := func(label string, a shard.Assignment, m shard.Model) {
 		base := reset()
 
-		tensors, sel, err := loadShardTensors(root, a, m)
+		tensors, sel, err := LoadShardTensors(root, a, m)
 		if err != nil {
 			t.Fatalf("%s: load: %v", label, err)
 		}

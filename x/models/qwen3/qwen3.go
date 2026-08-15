@@ -55,7 +55,31 @@ type Model struct {
 	*Config
 
 	weightPrefix string
+
+	// sharded is set once SetShard has been called. Until then the model holds
+	// every block and both ends, which is what an unsharded load expects.
+	sharded  bool
+	ownsHead bool
+	ownsTail bool
 }
+
+// Qwen3 is the reference architecture for the split: dense blocks, uniform KV
+// caches, and a one-to-one mapping from cache index to layer index.
+var _ base.Sharded = (*Model)(nil)
+
+// SetShard configures the model to hold count blocks and only the ends of the
+// pipeline it is responsible for. See base.Sharded.
+func (m *Model) SetShard(count int, head, tail bool) {
+	m.sharded, m.ownsHead, m.ownsTail = true, head, tail
+	m.Layers = make([]*Layer, count)
+}
+
+// isHead reports whether this model embeds input tokens and owns the output
+// projection. An unsharded model owns both ends.
+func (m *Model) isHead() bool { return !m.sharded || m.ownsHead }
+
+// isTail reports whether this model applies the final norm.
+func (m *Model) isTail() bool { return !m.sharded || m.ownsTail }
 
 // Layer is a single Qwen3 decoder block.
 type Layer struct {
@@ -178,19 +202,29 @@ func (m *Model) LoadWeights(tensors map[string]*mlx.Array) error {
 	prefix := m.weightPrefix
 	linears := model.NewLinearFactory(tensors, m.QuantGroupSize, m.QuantBits, m.QuantMode, m.TensorQuant)
 
-	embedTokens := model.MakeEmbeddingLayer(tensors, prefix+"model.embed_tokens", m.QuantGroupSize, m.QuantBits, m.QuantMode, m.TensorQuant)
-	if embedTokens == nil {
-		return fmt.Errorf("missing embedding weight: %smodel.embed_tokens.weight", prefix)
+	// A middle or tail shard receives a hidden state rather than token ids, so
+	// it holds no embedding — and the embedding is the largest single tensor
+	// in the model, so requiring one everywhere would defeat the split.
+	if m.isHead() {
+		embedTokens := model.MakeEmbeddingLayer(tensors, prefix+"model.embed_tokens", m.QuantGroupSize, m.QuantBits, m.QuantMode, m.TensorQuant)
+		if embedTokens == nil {
+			return fmt.Errorf("missing embedding weight: %smodel.embed_tokens.weight", prefix)
+		}
+		m.EmbedTokens = embedTokens
 	}
-	m.EmbedTokens = embedTokens
 
-	normWeight := tensors[prefix+"model.norm.weight"]
-	if normWeight == nil {
-		return fmt.Errorf("missing final norm weight: %smodel.norm.weight", prefix)
+	// The final norm belongs to whichever shard runs the last block.
+	if m.isTail() {
+		normWeight := tensors[prefix+"model.norm.weight"]
+		if normWeight == nil {
+			return fmt.Errorf("missing final norm weight: %smodel.norm.weight", prefix)
+		}
+		m.Norm = nn.NewRMSNorm(normWeight, m.RMSNormEps)
 	}
-	m.Norm = nn.NewRMSNorm(normWeight, m.RMSNormEps)
 
-	if m.TieWordEmbeddings {
+	if !m.isHead() {
+		// Nothing else to bind: a non-head shard is blocks only.
+	} else if m.TieWordEmbeddings {
 		m.LMHead = m.EmbedTokens.AsLinear()
 	} else if lmHead := linears.Make(prefix + "lm_head"); lmHead != nil {
 		m.LMHead = lmHead
@@ -201,7 +235,9 @@ func (m *Model) LoadWeights(tensors map[string]*mlx.Array) error {
 		m.LMHead = m.EmbedTokens.AsLinear()
 	}
 
-	for i := range m.NumHiddenLayers {
+	// Range over the slice rather than the config: a shard's slice is shorter,
+	// and its tensors arrive renumbered from zero so the indices still line up.
+	for i := range m.Layers {
 		layerPrefix := fmt.Sprintf("%smodel.layers.%d", prefix, i)
 
 		layer := &Layer{
@@ -255,11 +291,23 @@ func (m *Model) LoadWeights(tensors map[string]*mlx.Array) error {
 }
 
 func (m *Model) Forward(b *batch.Batch, caches []cache.Cache) (hidden, auxHidden *mlx.Array) {
-	dims := b.InputIDs.Dims()
-	B, L := int32(dims[0]), int32(dims[1])
+	// The head starts from token ids; every other shard starts from the hidden
+	// state its upstream neighbour produced. Batch dimensions come from
+	// whichever of the two is present.
+	var h *mlx.Array
+	var B, L int32
+	if m.EmbedTokens != nil {
+		dims := b.InputIDs.Dims()
+		B, L = int32(dims[0]), int32(dims[1])
+		h = m.EmbedTokens.Forward(b.InputIDs)
+	} else {
+		dims := b.Hidden.Dims()
+		B, L = int32(dims[0]), int32(dims[1])
+		h = b.Hidden
+	}
+
 	positions := mlx.FromValues(b.SeqOffsets, len(b.SeqOffsets))
 
-	h := m.EmbedTokens.Forward(b.InputIDs)
 	for i, layer := range m.Layers {
 		var c cache.Cache
 		if caches != nil && i < len(caches) {
@@ -268,8 +316,12 @@ func (m *Model) Forward(b *batch.Batch, caches []cache.Cache) (hidden, auxHidden
 		h = layer.Forward(h, b, c, positions, B, L, m.Config)
 	}
 
-	out := m.Norm.Forward(h, m.RMSNormEps)
-	return out, out
+	// Only the shard holding the last block applies the final norm; anyone
+	// else hands its hidden state onward untouched.
+	if m.Norm != nil {
+		h = m.Norm.Forward(h, m.RMSNormEps)
+	}
+	return h, h
 }
 
 func (m *Model) Unembed(x *mlx.Array) *mlx.Array {

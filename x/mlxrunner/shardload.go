@@ -8,7 +8,7 @@ import (
 	"github.com/ollama/ollama/x/mlxrunner/shard"
 )
 
-// loadShardTensors loads only the tensors a shard needs, named in the shard's
+// LoadShardTensors loads only the tensors a shard needs, named in the shard's
 // own block numbering.
 //
 // Selection happens on manifest metadata, so a blob belonging to a block this
@@ -29,7 +29,7 @@ import (
 // a.Range.Start becomes block 0 — so an unmodified model implementation can
 // bind them. Callers must set the model's block count to a.Range.Len() to
 // match.
-func loadShardTensors(root *model.Root, a shard.Assignment, m shard.Model) (map[string]*mlx.Array, shard.Selection, error) {
+func LoadShardTensors(root *model.Root, a shard.Assignment, m shard.Model) (map[string]*mlx.Array, shard.Selection, error) {
 	sel := shard.SelectLayers(root.Manifest.GetTensorLayers(""), a.Range, a.Role, m)
 
 	rawTensors := make(map[string]*mlx.Array)
