@@ -374,7 +374,6 @@ body {
           </div>
           <div class="metric-pair">
             <div class="metric"><div class="metric-label">In flight</div><div class="metric-value" id="mFlight">—</div></div>
-            <div class="metric"><div class="metric-label">Simulated</div><div class="metric-value" id="mSim">—</div></div>
           </div>
           <div class="metric-label" style="margin-top:4px" id="flightNote">circuit less what every node reported spending</div>
           <div class="stages" id="stageBreak"></div>
@@ -419,7 +418,7 @@ const state = {
   busy: new Set(),
   unreachable: new Set(),
   tokens: 0, hops: 0, circuits: 0, bytes: 0,
-  lastPayload: 0, lastRtt: 0, lastFlight: 0, lastCompute: 0, lastSim: 0,
+  lastPayload: 0, lastRtt: 0, lastFlight: 0, lastCompute: 0,
   stages: [], stretched: false,
   tps: null,
   events: [],
@@ -805,7 +804,6 @@ function onCircuit(h) {
   state.lastPayload = h.bytes || state.lastPayload;
   state.lastRtt = h.round_trip_ns || 0;
   state.lastCompute = h.remote_duration_ns || 0;
-  state.lastSim = h.simulated_ns || 0;
   state.lastFlight = Math.max(0, state.lastRtt - state.lastCompute);
   state.phase = h.phase;
   state.streaming = true;
@@ -894,7 +892,6 @@ function paint() {
   $("mRtt").textContent = state.lastRtt ? ns(state.lastRtt) : "—";
   $("mCompute").textContent = state.lastCompute ? ns(state.lastCompute) : "—";
   $("mFlight").textContent = state.lastFlight ? ns(state.lastFlight) : "—";
-  $("mSim").textContent = state.lastSim ? ns(state.lastSim) : "none";
 
   $("stageBreak").innerHTML = state.stages.map((st) => {
     const sim = st.simulated_ns ? `<i>+${ns(st.simulated_ns)}</i>` : "<span></span>";
