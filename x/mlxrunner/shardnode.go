@@ -17,6 +17,7 @@ import (
 	"github.com/ollama/ollama/x/cluster/agent"
 	"github.com/ollama/ollama/x/cluster/trace"
 	"github.com/ollama/ollama/x/mlxrunner/mlx"
+	"github.com/ollama/ollama/x/mlxrunner/model"
 	"github.com/ollama/ollama/x/mlxrunner/shard"
 )
 
@@ -44,6 +45,7 @@ func ExecuteShard(args []string) error {
 		stagesArg string
 		port      int
 		tracePath string
+		describe  bool
 	)
 
 	fs := flag.NewFlagSet("shardnode", flag.ExitOnError)
@@ -57,8 +59,20 @@ func ExecuteShard(args []string) error {
 	fs.StringVar(&stagesArg, "stages", "", "comma-separated addresses of downstream nodes, in order (head only)")
 	fs.IntVar(&port, "port", 0, "HTTP port for the runner interface (head only)")
 	fs.StringVar(&tracePath, "trace", "", "write the NDJSON span stream here")
+	fs.BoolVar(&describe, "describe", false, "print the model's block count and tie flag, then exit")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// A planner needs the block count and the tie flag before it can divide
+	// anything, and both come from the manifest rather than being guessed.
+	if describe {
+		spec, err := model.Inspect(modelName)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%d %t\n", spec.Blocks, spec.TiedEmbeddings)
+		return nil
 	}
 
 	blocks, err := agent.ParseRange(blocksArg)
