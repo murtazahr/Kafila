@@ -925,8 +925,11 @@ function paint() {
 function renderMode() {
   $("modeReal").setAttribute("aria-pressed", String(!state.demo));
   $("modeDemo").setAttribute("aria-pressed", String(state.demo));
+  // Demo view carries no caption: the presenter says what it is. Actual view
+  // keeps its note, because there the map is making a claim about a real
+  // deployment and the few-km spread between the dots is drawn, not measured.
   $("mapFoot").innerHTML = state.demo
-    ? `<span style="color:var(--accent-glow)">DEMO VIEW</span> · nodes drawn at illustrative sites to show a distributed deployment · all three are processes on one machine`
+    ? ``
     : `actual · three processes on one machine, loopback transport · the nodes are drawn a few km apart only so they can be told apart · arcs are the pipeline circuit, not physical routes`;
   renderMap();
   paint();
