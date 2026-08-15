@@ -8,7 +8,7 @@ import (
 
 	"github.com/ollama/ollama/llm"
 	"github.com/ollama/ollama/x/cluster"
-	"github.com/ollama/ollama/x/mlxrunner"
+	"github.com/ollama/ollama/x/mlxrunner/model"
 )
 
 // clusterEnabled reports whether inference should be routed through the
@@ -35,7 +35,7 @@ func clusterTracePath() string { return os.Getenv("OLLAMA_CLUSTER_TRACE") }
 // failing the load. Losing the control plane should degrade to ordinary
 // inference, not deny service.
 func newClusterPipeline(modelName string, local llm.LlamaServer) llm.LlamaServer {
-	m, err := mlxrunner.Inspect(modelName)
+	m, err := model.Inspect(modelName)
 	if err != nil {
 		slog.Warn("cluster: could not inspect model; serving unwrapped", "model", modelName, "error", err)
 		return local

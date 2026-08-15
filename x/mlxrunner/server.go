@@ -86,13 +86,59 @@ func Execute(args []string) error {
 		},
 	)
 
+	mux := runner.newMux(func() uint64 { return memoryCache.Memory() })
+
+	return runner.Run("127.0.0.1", strconv.Itoa(port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		recorder := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
+		t := time.Now()
+		mux.ServeHTTP(recorder, r)
+
+		var level slog.Level
+		switch {
+		case recorder.code >= 500:
+			level = slog.LevelError
+		case recorder.code >= 400:
+			level = slog.LevelWarn
+		case recorder.code >= 300:
+			return
+		}
+
+		slog.Log(r.Context(), level, "ServeHTTP", "method", r.Method, "path", r.URL.Path, "took", time.Since(t), "status", recorder.Status())
+	}))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (w *statusRecorder) WriteHeader(code int) {
+	w.code = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusRecorder) Status() string {
+	return strconv.Itoa(w.code) + " " + http.StatusText(w.code)
+}
+
+func (w *statusRecorder) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// newMux builds the runner's HTTP surface. Extracted so a pipeline head can
+// serve the same endpoints: everything above the runner speaks this interface
+// and must not be able to tell whether one model or several answered.
+func (runner *Runner) newMux(memory func() uint64) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(statusResponse{
 			Status:        0,
 			Progress:      100,
 			ContextLength: runner.contextLength,
-			Memory:        memoryCache.Memory(),
+			Memory:        memory(),
 		}); err != nil {
 			slog.Error("Failed to encode response", "error", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -206,42 +252,5 @@ func Execute(args []string) error {
 		mux.Handle(source, http.RedirectHandler(target, http.StatusPermanentRedirect))
 	}
 
-	return runner.Run("127.0.0.1", strconv.Itoa(port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		recorder := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
-		t := time.Now()
-		mux.ServeHTTP(recorder, r)
-
-		var level slog.Level
-		switch {
-		case recorder.code >= 500:
-			level = slog.LevelError
-		case recorder.code >= 400:
-			level = slog.LevelWarn
-		case recorder.code >= 300:
-			return
-		}
-
-		slog.Log(r.Context(), level, "ServeHTTP", "method", r.Method, "path", r.URL.Path, "took", time.Since(t), "status", recorder.Status())
-	}))
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	code int
-}
-
-func (w *statusRecorder) WriteHeader(code int) {
-	w.code = code
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *statusRecorder) Status() string {
-	return strconv.Itoa(w.code) + " " + http.StatusText(w.code)
-}
-
-func (w *statusRecorder) Flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	return mux
 }

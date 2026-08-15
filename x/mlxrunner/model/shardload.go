@@ -1,14 +1,14 @@
-package mlxrunner
+package model
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/ollama/ollama/x/mlxrunner/mlx"
-	"github.com/ollama/ollama/x/mlxrunner/model"
 	"github.com/ollama/ollama/x/mlxrunner/shard"
 )
 
-// loadShardTensors loads only the tensors a shard needs, named in the shard's
+// LoadShardTensors loads only the tensors a shard needs, named in the shard's
 // own block numbering.
 //
 // Selection happens on manifest metadata, so a blob belonging to a block this
@@ -29,7 +29,7 @@ import (
 // a.Range.Start becomes block 0 — so an unmodified model implementation can
 // bind them. Callers must set the model's block count to a.Range.Len() to
 // match.
-func loadShardTensors(root *model.Root, a shard.Assignment, m shard.Model) (map[string]*mlx.Array, shard.Selection, error) {
+func LoadShardTensors(root *Root, a shard.Assignment, m shard.Model) (map[string]*mlx.Array, shard.Selection, error) {
 	sel := shard.SelectLayers(root.Manifest.GetTensorLayers(""), a.Range, a.Role, m)
 
 	rawTensors := make(map[string]*mlx.Array)
@@ -47,7 +47,7 @@ func loadShardTensors(root *model.Root, a shard.Assignment, m shard.Model) (map[
 	// Remap after normalizing suffixes: the quantization companions carry the
 	// same block index as the weight they belong to, so rewriting indices last
 	// keeps a weight and its scale together.
-	tensors := shard.RemapAll(normalizeQuantSuffixes(rawTensors), a.Range)
+	tensors := shard.RemapAll(NormalizeQuantSuffixes(rawTensors), a.Range)
 
 	slog.Info("loaded shard tensors",
 		"range", a.Range, "role", a.Role, "count", len(tensors),
@@ -55,4 +55,42 @@ func loadShardTensors(root *model.Root, a shard.Assignment, m shard.Model) (map[
 		"skipped_layers", sel.Skipped, "fraction", sel.Fraction())
 
 	return tensors, sel, nil
+}
+
+// NormalizeQuantSuffixes folds each tensor's companion ".scale" and ".bias"
+// entries into the "_scale" and "_qbias" names the model implementations bind
+// against.
+//
+// Two passes: collect every base name carrying a ".scale" first, then rewrite
+// the rest with complete knowledge of which ones are quantized. Doing it in one
+// pass would let Go's map iteration order decide whether a ".bias" is seen
+// before its sibling ".scale", which changes the name it lands under.
+func NormalizeQuantSuffixes(rawTensors map[string]*mlx.Array) map[string]*mlx.Array {
+	scaleBaseNames := make(map[string]bool)
+	allTensors := make(map[string]*mlx.Array, len(rawTensors))
+	for name, arr := range rawTensors {
+		if strings.HasSuffix(name, ".scale") {
+			baseName := strings.TrimSuffix(name, ".scale")
+			allTensors[baseName+"_scale"] = arr
+			scaleBaseNames[baseName] = true
+		}
+	}
+
+	for name, arr := range rawTensors {
+		if strings.HasSuffix(name, ".scale") {
+			continue // already handled
+		}
+		if strings.HasSuffix(name, ".bias") && !strings.HasSuffix(name, ".weight_qbias") {
+			baseName := strings.TrimSuffix(name, ".bias")
+			if scaleBaseNames[baseName] {
+				allTensors[baseName+"_qbias"] = arr
+			} else {
+				allTensors[name] = arr
+			}
+		} else {
+			allTensors[name] = arr
+		}
+	}
+
+	return allTensors
 }

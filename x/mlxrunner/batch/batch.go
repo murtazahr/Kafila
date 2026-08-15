@@ -54,6 +54,23 @@ type MediaItem struct {
 	Opaque any
 }
 
+// QueryLen returns the padded query length — the second axis of whatever this
+// batch carries.
+//
+// A head batch carries token ids; every other shard in a split carries a hidden
+// state instead, whose leading shape is the same [B, L, ...]. Masking and
+// dispatch need L and do not care which of the two supplied it, so asking the
+// batch keeps them from depending on being at the start of the model.
+func (b *Batch) QueryLen() int {
+	if b.InputIDs != nil {
+		return b.InputIDs.Dim(1)
+	}
+	if b.Hidden != nil {
+		return b.Hidden.Dim(1)
+	}
+	return 0
+}
+
 type Memo struct {
 	entries map[any]any
 }

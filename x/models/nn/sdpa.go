@@ -177,7 +177,7 @@ func (inputs dispatchInputs) resolve() sdpaDispatch {
 	case mask.IsZero():
 		return sdpaDispatch{mode: ""}
 	case mask.IsCausal():
-		if inputs.batch.InputIDs.Dim(1) == 1 {
+		if inputs.batch.QueryLen() == 1 {
 			// At L=1 the causal "k > q" constraint is redundant -
 			// drop it so the kernel dispatches to the no-mask fast path.
 			return sdpaDispatch{mode: ""}
@@ -432,7 +432,7 @@ func (m AttentionMask) AsArray(b *batch.Batch, K int, dtype mlx.DType) *mlx.Arra
 	}
 
 	B := len(b.SeqOffsets)
-	L := b.InputIDs.Dim(1)
+	L := b.QueryLen()
 
 	negInf := float32(math.Inf(-1))
 	vals := make([]float32, B*L*K)
@@ -488,7 +488,7 @@ func (m AttentionMask) AsArray(b *batch.Batch, K int, dtype mlx.DType) *mlx.Arra
 // logical — independent of whatever layout the cache uses for K.
 // Returns the zero mask when every row is full.
 func QPaddingMask(b *batch.Batch, dtype mlx.DType) AttentionMask {
-	return padTailMask(len(b.SeqOffsets), b.InputIDs.Dim(1), 2, b.SeqQueryLens, dtype)
+	return padTailMask(len(b.SeqOffsets), b.QueryLen(), 2, b.SeqQueryLens, dtype)
 }
 
 // KPaddingMask returns an additive [B, 1, 1, K] mask that blocks
@@ -512,7 +512,7 @@ func SlidingWindowMask(b *batch.Batch, K, window int, dtype mlx.DType) Attention
 		return AttentionMask{}
 	}
 	B := len(b.SeqOffsets)
-	L := b.InputIDs.Dim(1)
+	L := b.QueryLen()
 	negInf := float32(math.Inf(-1))
 	vals := make([]float32, B*L*K)
 	needed := false

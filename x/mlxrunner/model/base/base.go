@@ -32,6 +32,29 @@ type Model interface {
 	MaxContextLength() int
 }
 
+// Sharded is an optional interface for models that can hold a contiguous range
+// of transformer blocks rather than the whole stack.
+//
+// Most of what a shard needs is already true of these implementations: Forward
+// ranges over the Layers slice and NewCaches sizes itself from it, so a shorter
+// slice is coherent on its own. What a model cannot infer is which ends of the
+// pipeline it is responsible for — whether to embed input tokens or receive a
+// hidden state, and whether to apply the final norm — because that depends on
+// where it sits among its peers rather than on anything in the checkpoint.
+//
+// SetShard is called after construction and before LoadWeights. A model that
+// does not implement this runs whole, which is what every caller outside the
+// cluster path wants.
+type Sharded interface {
+	Model
+
+	// SetShard tells the model it owns count blocks, and whether it is the
+	// head (owns the embedding, the output projection and the sampler) or the
+	// tail (owns the final norm). Tensors are handed to LoadWeights renumbered
+	// from zero, so the model does not need to know its absolute offset.
+	SetShard(count int, head, tail bool)
+}
+
 // DraftModel is an auxiliary model alongside a target that proposes speculative
 // tokens.
 type DraftModel interface {

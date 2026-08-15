@@ -1,11 +1,10 @@
-package mlxrunner
+package model
 
 import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
 
-	"github.com/ollama/ollama/x/mlxrunner/model"
 	"github.com/ollama/ollama/x/mlxrunner/shard"
 )
 
@@ -18,7 +17,7 @@ import (
 // tensor names in the manifest and the tie from config.json — so planning can
 // happen before anything is committed to a node.
 func Inspect(modelName string) (shard.Model, error) {
-	root, err := model.Open(modelName)
+	root, err := Open(modelName)
 	if err != nil {
 		return shard.Model{}, fmt.Errorf("inspect %s: %w", modelName, err)
 	}
@@ -27,7 +26,7 @@ func Inspect(modelName string) (shard.Model, error) {
 	return inspectRoot(root)
 }
 
-func inspectRoot(root *model.Root) (shard.Model, error) {
+func inspectRoot(root *Root) (shard.Model, error) {
 	layers := root.Manifest.GetTensorLayers("")
 	if len(layers) == 0 {
 		return shard.Model{}, fmt.Errorf("model has no tensor layers; it is not a safetensors model")
