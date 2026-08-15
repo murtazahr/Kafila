@@ -49,30 +49,35 @@ reaching MLX outside that path has to observe the same rule. In particular
 CUDA while passing on Metal. Tests need `runtime.LockOSThread`, and any future
 shard agent must keep its MLX work on the pinned thread.
 
-## Concurrent MLX processes contend, and tests go flaky
+## The MLX test suite is flaky, and -p 1 only helps a little
 
-`go test ./x/...` runs package binaries in parallel, so several processes
-initialize MLX and drive the same GPU at once. Roughly one run in three then
-fails somewhere unrelated to what changed, with:
+`go test ./x/...` fails intermittently, somewhere unrelated to whatever
+changed, with:
 
     mlx: There is no Stream(gpu, 0) in current thread
 
 The failure moves between packages from run to run, which is the signature of
-contention rather than a bug in whichever test reported it. Adding another
-MLX-using package makes it more likely, since it adds another concurrent
-process.
+contention rather than a bug in whichever test reported it. Measured over four
+runs each: **2/4 failed with default parallelism, 1/4 failed with `-p 1`**. So
+serializing packages reduces it and does not remove it — an earlier version of
+this note claimed `-p 1` made the suite trustworthy, and that was too strong.
 
-Run the suite with `-p 1` when the result has to be trusted:
+What is reliable is running one package at a time, which always passes:
 
 ```sh
-go test ./x/... -count=1 -p 1
+go test ./x/mlxrunner/ -count=1
+go test ./x/cluster/... -count=1
 ```
 
-This is the same underlying limitation that stops two shards sharing a process
-(see the pipeline notes): MLX keeps global state that several independent
-models stepping on each other will disturb. Across processes it is intermittent
-rather than a hard deadlock, which makes it more annoying to diagnose and no
-less real.
+Since `-p 1` already serializes packages, the residue is probably GPU or driver
+state outliving a test process rather than two processes overlapping. Worth
+treating a single red run as unproven rather than as a regression: re-run the
+package on its own before believing it.
+
+This is the same underlying limitation that stops two shards sharing a process:
+MLX keeps global state that several independent models disturb. Across
+processes it is intermittent rather than a hard deadlock, which makes it harder
+to diagnose and no less real.
 
 ## Wired-memory limits do not exist on CUDA
 
