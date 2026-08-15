@@ -11,8 +11,8 @@ import (
 
 	"github.com/ollama/ollama/x/cluster/trace"
 	"github.com/ollama/ollama/x/cluster/wire"
-	"github.com/ollama/ollama/x/mlxrunner"
 	"github.com/ollama/ollama/x/mlxrunner/mlx"
+	"github.com/ollama/ollama/x/mlxrunner/model"
 	"github.com/ollama/ollama/x/mlxrunner/shard"
 )
 
@@ -51,7 +51,7 @@ func TestPipelineOverTCP(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	spec, err := mlxrunner.Inspect(modelName)
+	spec, err := model.Inspect(modelName)
 	if err != nil {
 		t.Fatalf("inspect: %v", err)
 	}
