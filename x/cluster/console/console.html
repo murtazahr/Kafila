@@ -7,22 +7,34 @@
 <link rel="stylesheet" href="/assets/leaflet.css">
 <style>
 :root {
-  --bg: #161826;
-  --panel: #1b1d2e;
-  --panel-2: #1f2134;
-  --accent: #9184d9;
-  --accent-dim: #5d5294;
-  --accent-glow: #b5abfc;
-  --fault: #ff8a80;
-  --ok: #7fd1a8;
-  --n100: #f3f5fe;
-  --n300: #cfd3e5;
-  --n400: #b2b6ca;
-  --n500: #9397ab;
-  --n600: #75798c;
-  --n700: #595d6c;
-  --n800: #3f424d;
-  --divider: color-mix(in srgb, #e9e9ed 14%, transparent);
+  /* One hue family, shared with the map.
+     CARTO Dark Matter is almost entirely neutral grey, and hue-rotate does
+     nothing to a neutral, so tinting it needs sepia first to give the greys a
+     saturation to rotate. The map is pushed onto the same indigo as this
+     palette, and these values are pitched dark enough to sit against it rather
+     than float on top of it. */
+  --bg: #0c0e17;
+  --panel: #121522;
+  --panel-2: #171b2b;
+  --sunk: #0e1120;
+
+  --accent: #8d84e0;
+  --accent-dim: #4e4791;
+  --accent-glow: #b3aaff;
+  --accent-wash: color-mix(in srgb, var(--accent) 14%, transparent);
+
+  --fault: #ff8f88;
+  --ok: #7ad3ac;
+
+  --n100: #eef0fb;
+  --n300: #c6cadf;
+  --n400: #a7abc4;
+  --n500: #888da6;
+  --n600: #6b7089;
+  --n700: #545970;
+  --n800: #3a3f54;
+
+  --divider: color-mix(in srgb, #aab0d8 15%, transparent);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -78,24 +90,76 @@ body {
 .panel-body { padding: 12px; overflow: auto; min-height: 0; }
 
 /* ---------- chat ---------- */
-.chat-log { display: flex; flex-direction: column; gap: 14px; }
-.turn-label { font-family: var(--mono); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--n700); margin-bottom: 5px; }
-.turn-text { font-size: 12.5px; line-height: 1.55; color: var(--n300); border-left: 2px solid var(--n800); padding-left: 10px; white-space: pre-wrap; }
-.turn-text.out { border-left-color: var(--accent); color: var(--n100); }
-.caret { display: inline-block; width: 6px; height: 13px; background: var(--accent-glow); vertical-align: -2px; animation: blink 1s steps(2) infinite; }
+.chat-log { display: flex; flex-direction: column; gap: 13px; scroll-behavior: smooth; }
+.chat-empty {
+  margin: auto 0; text-align: center; color: var(--n700);
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.9;
+}
+.chat-empty b { display: block; color: var(--n500); font-size: 11px; margin-bottom: 6px; letter-spacing: .1em; }
+.chat-empty i { font-style: normal; color: var(--accent-dim); }
+
+.turn { display: flex; flex-direction: column; gap: 5px; }
+.turn-label {
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .2em;
+  text-transform: uppercase; color: var(--n700);
+}
+.turn-text { font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+
+/* The prompt is the quieter of the two: it is what you already know. */
+.turn.in .turn-text {
+  color: var(--n400); background: var(--sunk);
+  border: 1px solid var(--divider); border-radius: 4px; padding: 8px 10px;
+}
+.turn.out .turn-text {
+  color: var(--n100); border-left: 2px solid var(--accent);
+  padding: 1px 0 1px 11px;
+}
+.turn.out .turn-text code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--panel-2); border-radius: 3px; padding: 1px 4px; color: var(--accent-glow);
+}
+.turn.out .turn-text strong { color: #fff; font-weight: 600; }
+.turn-foot {
+  font-family: var(--mono); font-size: 8.5px; color: var(--n700);
+  padding-left: 13px; display: flex; gap: 10px;
+}
+.turn-foot .err { color: var(--fault); }
+
+.caret {
+  display: inline-block; width: 6px; height: 13px; background: var(--accent-glow);
+  vertical-align: -2px; animation: blink 1s steps(2) infinite;
+}
 @keyframes blink { 50% { opacity: 0; } }
-.chat-foot { padding: 10px 12px; border-top: 1px solid var(--divider); display: flex; gap: 8px; }
-.chat-foot input {
-  flex: 1; background: var(--panel-2); border: 1px solid var(--n800); border-radius: 3px;
+
+.chat-foot { padding: 9px 10px; border-top: 1px solid var(--divider); }
+.chat-row { display: flex; gap: 7px; align-items: flex-end; }
+.chat-foot textarea {
+  flex: 1; resize: none; overflow-y: auto; max-height: 108px;
+  background: var(--sunk); border: 1px solid var(--n800); border-radius: 4px;
   color: var(--n100); padding: 7px 9px; font-family: var(--sans); font-size: 12px;
+  line-height: 1.45; min-height: 32px;
 }
-.chat-foot input:focus { outline: none; border-color: var(--accent-dim); }
-.chat-foot button {
-  background: color-mix(in srgb, var(--accent) 20%, transparent); border: 1px solid var(--accent-dim);
-  color: var(--n100); border-radius: 3px; padding: 7px 13px; cursor: pointer;
+.chat-foot textarea:focus { outline: none; border-color: var(--accent-dim); }
+.chat-foot textarea::placeholder { color: var(--n700); }
+.btn {
+  border-radius: 4px; padding: 7px 12px; cursor: pointer; white-space: nowrap;
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+  background: var(--accent-wash); border: 1px solid var(--accent-dim); color: var(--n100);
 }
-.chat-foot button:disabled { opacity: .4; cursor: default; }
+.btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+.btn:disabled { opacity: .35; cursor: default; }
+.btn.stop { background: color-mix(in srgb, var(--fault) 16%, transparent); border-color: var(--fault); color: var(--fault); }
+.chat-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 7px; font-family: var(--mono); font-size: 8.5px; color: var(--n700);
+}
+.linkish {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: 8.5px; color: var(--n600);
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.linkish:hover { color: var(--accent-glow); }
+.linkish:disabled { opacity: .35; cursor: default; }
 
 /* ---------- block ruler ---------- */
 .ruler { padding: 10px 12px 4px; }
@@ -111,12 +175,12 @@ body {
 
 /* ---------- map ---------- */
 .mapwrap { position: relative; flex: 1; min-height: 0; padding: 0 12px 8px; }
-#map { width: 100%; height: 100%; background: #12141f; border-radius: 4px; }
+#map { width: 100%; height: 100%; background: var(--sunk); border-radius: 4px; }
 .map-foot { padding: 0 12px 10px; font-family: var(--mono); font-size: 9.5px; color: var(--n700); }
 
 /* Leaflet furniture, dressed to match the console. Its own stylesheet is
    loaded first so these win. */
-.leaflet-container { background: #12141f; font-family: var(--mono); outline: none; }
+.leaflet-container { background: var(--sunk); font-family: var(--mono); outline: none; }
 .leaflet-control-attribution {
   background: color-mix(in srgb, var(--panel) 82%, transparent) !important;
   color: var(--n700) !important; font-size: 8.5px !important;
@@ -128,15 +192,17 @@ body {
 }
 .leaflet-bar a:hover { background: var(--panel-2); color: var(--accent-glow); }
 
-/* The tiles are a neutral dark grey. Nudging them toward the accent hue and
-   dimming them keeps the basemap behind the data rather than beside it. */
-.tinted { filter: hue-rotate(198deg) saturate(1.5) brightness(.82) contrast(1.06); }
+/* Dark Matter's tiles are near-neutral grey, and hue-rotate leaves a neutral
+   alone -- which is why the earlier tint did nothing. sepia() gives the greys a
+   saturation first, and the rotation then lands them on this palette's indigo.
+   Kept dark on purpose: the basemap is behind the data, not beside it. */
+.tinted { filter: grayscale(1) sepia(1) hue-rotate(211deg) saturate(1.45) brightness(.52) contrast(1.08); }
 
-.land { fill: #262a45; stroke: #3a4066; stroke-width: .7; fill-opacity: 1; }
-.arc { stroke: #565b7d; }
+.land { fill: #1d2138; stroke: #333962; stroke-width: .7; fill-opacity: 1; }
+.arc { stroke: #5b6088; }
 .arc.live { stroke: var(--accent-glow); filter: drop-shadow(0 0 4px var(--accent-glow)); }
 .arc.dead { stroke: var(--fault); }
-.node-dot { fill: var(--n600); stroke: #12141f; stroke-width: 1.5; }
+.node-dot { fill: var(--n500); stroke: var(--sunk); stroke-width: 1.5; }
 .node-dot.busy { fill: var(--accent-glow); }
 .node-dot.dead { fill: var(--fault); }
 .node-ring { fill: none; stroke: var(--accent-glow); opacity: 0; }
@@ -237,8 +303,14 @@ body {
         <div class="panel-head"><span>Chat</span><span class="note" id="chatState">ready</span></div>
         <div class="panel-body chat-log" id="chatLog"></div>
         <div class="chat-foot">
-          <input id="prompt" placeholder="Send a message…" autocomplete="off">
-          <button id="send">Send</button>
+          <div class="chat-row">
+            <textarea id="prompt" rows="1" placeholder="Send a message…  ⏎ to send, ⇧⏎ for a new line"></textarea>
+            <button class="btn" id="send">Send</button>
+          </div>
+          <div class="chat-bar">
+            <span id="turnCount"></span>
+            <button class="linkish" id="reset" disabled>New conversation</button>
+          </div>
         </div>
       </section>
     </div>
@@ -866,45 +938,142 @@ $("modeDemo").onclick = () => { state.demo = true; renderMode(); };
 // ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Chat formatting
+//
+// The runner is a completion engine: it continues text and knows nothing about
+// turns. Instruction-tuned models only behave like assistants when the prompt
+// is wrapped in the format they were tuned on, and without that wrapping Qwen3
+// does what it was literally asked -- carries on writing the document that
+// began with your question. That is the difference between "Is Unimelb any
+// good?" being answered and it being continued into a list of related
+// questions.
+//
+// In the whole Ollama stack this wrapping is applied above the runner, from the
+// template the model ships with. The MLX runner does not implement that path
+// (Client.ApplyChatTemplate is an explicit stub), so the console does it here.
+// It is Qwen3's ChatML written out by hand, which is fine for one model family
+// and is why R12 exists: the template ships in the checkpoint's
+// tokenizer_config.json as Jinja, and the runner should apply it rather than
+// every caller reimplementing it.
+const SYSTEM = "You are a helpful assistant. Answer clearly and concisely.";
+
+// Turns already completed, so the model follows a conversation rather than
+// answering each message cold. Cache reuse cannot span a ring yet, so every
+// request reprocesses all of this from the start -- see R11.
+const history = [];
+
+function chatPrompt(text) {
+  const turns = [{ role: "system", content: SYSTEM }, ...history, { role: "user", content: text }];
+  let out = "";
+  for (const t of turns) {
+    out += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
+  }
+  // Qwen3 reasons inside <think> blocks when invited to. An empty one says the
+  // thinking is done, which stops a 0.6B model spending the whole token budget
+  // talking to itself before it answers.
+  return out + "<|im_start|>assistant\n<think>\n\n</think>\n\n";
+}
+
 const log = $("chatLog");
+let inFlight = null;   // AbortController while a completion is streaming
+
+function emptyState() {
+  log.innerHTML = `<div class="chat-empty">
+    <b>NO TRAFFIC</b>
+    every message runs the full ring<br>
+    <i>head → stage1 → stage2 → head</i>
+  </div>`;
+}
+emptyState();
 
 function addTurn(label, cls) {
+  if (log.querySelector(".chat-empty")) log.innerHTML = "";
   const wrap = document.createElement("div");
-  wrap.innerHTML = `<div class="turn-label">${label}</div><div class="turn-text ${cls}"></div>`;
+  wrap.className = `turn ${cls}`;
+  wrap.innerHTML = `<div class="turn-label">${label}</div><div class="turn-text"></div>`;
   log.appendChild(wrap);
-  log.scrollTop = log.scrollHeight;
+  scrollIfPinned(true);
   return wrap.querySelector(".turn-text");
 }
 
+// Follow the stream only while the reader is already at the bottom. Yanking the
+// view down while someone is reading an earlier answer is worse than letting
+// new text arrive off screen.
+function scrollIfPinned(force) {
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  if (force || nearBottom) log.scrollTop = log.scrollHeight;
+}
+
+// A deliberately small subset: bold, inline code, and the paragraph breaks the
+// model actually emits. Rendering arbitrary markdown here would mean parsing
+// model output into HTML, and the escaping has to come first either way.
+function format(text) {
+  return escape(text)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+}
+
+function setBusy(busy) {
+  $("send").textContent = busy ? "Stop" : "Send";
+  $("send").classList.toggle("stop", busy);
+  $("prompt").disabled = busy;
+  $("reset").disabled = busy || history.length === 0;
+  $("chatState").textContent = busy ? "streaming" : "ready";
+  $("turnCount").textContent = history.length
+    ? `${history.length / 2} turn${history.length === 2 ? "" : "s"} in context`
+    : "";
+}
+
+function resetChat() {
+  history.length = 0;
+  emptyState();
+  setBusy(false);
+}
+
 async function send() {
+  // The button is the stop control while a completion is streaming: one target
+  // for the thing you want, rather than a second button that is dead most of
+  // the time.
+  if (inFlight) { inFlight.abort(); return; }
+
   const input = $("prompt");
   const text = input.value.trim();
   if (!text) return;
 
   input.value = "";
-  $("send").disabled = true;
-  $("chatState").textContent = "streaming";
-
-  addTurn("Prompt", "").textContent = text;
+  input.style.height = "auto";
+  addTurn("Prompt", "in").textContent = text;
   const out = addTurn("Completion", "out");
   out.innerHTML = '<span class="caret"></span>';
 
+  const foot = document.createElement("div");
+  foot.className = "turn-foot";
+  out.parentElement.appendChild(foot);
+
   state.tokens = 0; state.hops = 0; state.circuits = 0; state.bytes = 0; state.stages = [];
   decodeTimes = [];
+
+  inFlight = new AbortController();
+  setBusy(true);
+  const started = performance.now();
+  let acc = "";
 
   try {
     const res = await fetch("/v1/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: inFlight.signal,
       body: JSON.stringify({
         Prompt: chatPrompt(text),
         Options: { num_predict: 220, temperature: 0.7, top_p: 0.8, top_k: 20 },
       }),
     });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 
     const reader = res.body.getReader();
     const dec = new TextDecoder();
-    let buf = "", acc = "";
+    let buf = "";
 
     for (;;) {
       const { value, done } = await reader.read();
@@ -918,57 +1087,36 @@ async function send() {
           const d = JSON.parse(line);
           if (d.Content) {
             acc += d.Content;
-            out.innerHTML = escape(acc) + '<span class="caret"></span>';
-            log.scrollTop = log.scrollHeight;
+            out.innerHTML = format(acc) + '<span class="caret"></span>';
+            scrollIfPinned(false);
           }
         } catch {}
       }
     }
-    out.innerHTML = escape(acc);
+    out.innerHTML = format(acc);
     history.push({ role: "user", content: text }, { role: "assistant", content: acc.trim() });
   } catch (err) {
-    out.innerHTML = `<span style="color:var(--fault)">${escape(String(err))}</span>`;
+    // An abort is the user's own doing, so it is reported as a fact about the
+    // answer rather than as a failure.
+    const stopped = err.name === "AbortError";
+    out.innerHTML = acc ? format(acc) : `<span class="dim">—</span>`;
+    if (stopped && acc) {
+      history.push({ role: "user", content: text }, { role: "assistant", content: acc.trim() });
+    }
+    foot.innerHTML = stopped
+      ? `<span>stopped</span>`
+      : `<span class="err">${escape(String(err.message || err))}</span>`;
   } finally {
-    $("send").disabled = false;
-    $("chatState").textContent = "ready";
+    const secs = (performance.now() - started) / 1000;
+    if (!foot.innerHTML || !foot.querySelector(".err")) {
+      const rate = state.tokens && secs ? ` · ${(state.tokens / secs).toFixed(1)} tok/s` : "";
+      foot.innerHTML = `${foot.innerHTML}<span>${state.tokens} tokens · ${secs.toFixed(1)}s${rate}</span>`;
+    }
+    inFlight = null;
+    setBusy(false);
     goIdle();
+    scrollIfPinned(false);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Chat formatting
-//
-// The runner is a completion engine: it continues text and knows nothing about
-// turns. Instruction-tuned models only behave like assistants when the prompt
-// is wrapped in the format they were tuned on, and without that wrapping Qwen3
-// does what it was asked to do -- carry on writing the document that began with
-// your question. That is the difference between "Is Unimelb any good?" being
-// answered and it being continued into a list of related questions.
-//
-// In the whole Ollama stack this wrapping is applied above the runner, from the
-// template the model ships with. The MLX runner does not implement that path
-// (Client.ApplyChatTemplate is an explicit stub), so the console does it here.
-// It is Qwen3's ChatML written out by hand, which is fine for one model family
-// and is the reason R12 exists: the template ships in the checkpoint's
-// tokenizer_config.json as Jinja, and the runner should apply it rather than
-// having every caller reimplement it.
-const SYSTEM = "You are a helpful assistant. Answer clearly and concisely.";
-
-// Turns already completed, so the model can follow a conversation rather than
-// answering each message cold. Cache reuse cannot span a ring yet, so every
-// request reprocesses this from the start -- see R11.
-const history = [];
-
-function chatPrompt(text) {
-  const turns = [{ role: "system", content: SYSTEM }, ...history, { role: "user", content: text }];
-  let out = "";
-  for (const t of turns) {
-    out += `<|im_start|>${t.role}\n${t.content}<|im_end|>\n`;
-  }
-  // Qwen3 reasons inside <think> blocks when invited to. An empty one tells it
-  // the thinking is done, which keeps a 0.6B model from spending the whole
-  // token budget talking to itself before it answers.
-  return out + "<|im_start|>assistant\n<think>\n\n</think>\n\n";
 }
 
 function escape(s) {
@@ -976,7 +1124,18 @@ function escape(s) {
 }
 
 $("send").onclick = send;
-$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+$("reset").onclick = resetChat;
+
+// Enter sends, shift-enter breaks the line, and the box grows with the text
+// rather than scrolling a single row.
+const prompt = $("prompt");
+prompt.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+prompt.addEventListener("input", () => {
+  prompt.style.height = "auto";
+  prompt.style.height = Math.min(prompt.scrollHeight, 108) + "px";
+});
 
 // ---------------------------------------------------------------------------
 boot().then(connect).catch((e) => {
