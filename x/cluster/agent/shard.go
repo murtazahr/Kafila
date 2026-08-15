@@ -18,7 +18,6 @@ import (
 	"log/slog"
 
 	"github.com/ollama/ollama/x/internal/mlxthread"
-	"github.com/ollama/ollama/x/mlxrunner"
 	"github.com/ollama/ollama/x/mlxrunner/batch"
 	"github.com/ollama/ollama/x/mlxrunner/cache"
 	"github.com/ollama/ollama/x/mlxrunner/mlx"
@@ -118,7 +117,7 @@ func loadOnThread(cfg Config) (*Shard, error) {
 	}
 	sharded.SetShard(cfg.Assignment.Range.Len(), cfg.Assignment.Role.IsHead(), cfg.Assignment.Role.IsTail())
 
-	tensors, sel, err := mlxrunner.LoadShardTensors(root, cfg.Assignment, cfg.Model)
+	tensors, sel, err := model.LoadShardTensors(root, cfg.Assignment, cfg.Model)
 	if err != nil {
 		return nil, err
 	}

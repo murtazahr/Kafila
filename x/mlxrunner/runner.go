@@ -3,11 +3,11 @@ package mlxrunner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"slices"
-	"strings"
 
 	"golang.org/x/sync/errgroup"
 
@@ -121,6 +121,39 @@ func (r *Runner) Load(modelName string) error {
 	return nil
 }
 
+// Attach wires the runner around a model that is already built, rather than
+// loading one from a manifest.
+//
+// A pipeline head is composed from a local shard and connections to the stages
+// downstream, so there is no single set of tensors to load. Everything after
+// that point is the same: caches, the prefix cache, and the sampler are built
+// from the model's own reported shape, and the prefill and decode loops call it
+// through base.Model without caring what is behind it.
+//
+// Taking base.Model rather than a concrete pipeline type is what keeps this
+// package independent of the cluster packages, which already depend on it.
+//
+// Speculative decoding is not wired up: a draft head would have to run across
+// the same split as the target, which is a separate problem.
+func (r *Runner) Attach(m base.Model) error {
+	if m == nil {
+		return fmt.Errorf("mlxrunner: Attach needs a model")
+	}
+
+	configureWiredMemory()
+
+	r.Model = m
+	r.Tokenizer = m.Tokenizer()
+	r.contextLength = m.MaxContextLength()
+	r.cache = newPrefixCache(m.NewCaches())
+	r.Sampler = sample.New(r.contextLength)
+	r.spec = newSpeculation(r, nil, nil, nil)
+
+	mlx.EnableCompile()
+
+	return nil
+}
+
 // newDraftCaches returns nil when the model ships no draft.
 func newDraftCaches(draft base.DraftModel) []cache.Cache {
 	if draft == nil {
@@ -186,48 +219,10 @@ func loadTensorsFromManifest(root *model.Root) (map[string]*mlx.Array, error) {
 		}
 	}
 
-	allTensors := normalizeQuantSuffixes(rawTensors)
+	allTensors := model.NormalizeQuantSuffixes(rawTensors)
 
 	slog.Info("Loaded tensors from manifest", "count", len(allTensors))
 	return allTensors, nil
-}
-
-// normalizeQuantSuffixes folds each tensor's companion ".scale" and ".bias"
-// entries into the "_scale" and "_qbias" names the model implementations bind
-// against.
-//
-// Two passes: collect every base name carrying a ".scale" first, then rewrite
-// the rest with complete knowledge of which ones are quantized. Doing it in one
-// pass would let Go's map iteration order decide whether a ".bias" is seen
-// before its sibling ".scale", which changes the name it lands under.
-func normalizeQuantSuffixes(rawTensors map[string]*mlx.Array) map[string]*mlx.Array {
-	scaleBaseNames := make(map[string]bool)
-	allTensors := make(map[string]*mlx.Array, len(rawTensors))
-	for name, arr := range rawTensors {
-		if strings.HasSuffix(name, ".scale") {
-			baseName := strings.TrimSuffix(name, ".scale")
-			allTensors[baseName+"_scale"] = arr
-			scaleBaseNames[baseName] = true
-		}
-	}
-
-	for name, arr := range rawTensors {
-		if strings.HasSuffix(name, ".scale") {
-			continue // already handled
-		}
-		if strings.HasSuffix(name, ".bias") && !strings.HasSuffix(name, ".weight_qbias") {
-			baseName := strings.TrimSuffix(name, ".bias")
-			if scaleBaseNames[baseName] {
-				allTensors[baseName+"_qbias"] = arr
-			} else {
-				allTensors[name] = arr
-			}
-		} else {
-			allTensors[name] = arr
-		}
-	}
-
-	return allTensors
 }
 
 func (r *Runner) Run(host, port string, mux http.Handler) error {

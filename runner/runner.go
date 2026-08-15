@@ -15,7 +15,11 @@ func Execute(args []string) error {
 		switch args[0] {
 		case "--mlx-engine":
 			return mlxrunner.Execute(args[1:])
+		case "--shard":
+			// One node of a split model. Every node runs this and differs only
+			// in flags; see x/mlxrunner/shardnode.go.
+			return mlxrunner.ExecuteShard(args[1:])
 		}
 	}
-	return fmt.Errorf("unknown runner engine, expected --mlx-engine")
+	return fmt.Errorf("unknown runner engine, expected --mlx-engine or --shard")
 }
