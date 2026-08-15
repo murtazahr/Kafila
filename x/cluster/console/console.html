@@ -220,7 +220,11 @@ body {
 
 /* ---------- node cards ---------- */
 .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.card { background: var(--panel); border: 1px solid var(--divider); border-radius: 5px; padding: 11px 12px; position: relative; overflow: hidden; }
+.card {
+  background: var(--panel); border: 1px solid var(--divider); border-radius: 5px;
+  padding: 11px 12px; position: relative; overflow: hidden;
+  display: flex; flex-direction: column;
+}
 .card.busy { border-color: var(--accent-dim); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
 .card.dead { border-color: color-mix(in srgb, var(--fault) 45%, transparent); }
 .card.dead .card-blocks, .card.dead .card-name { color: var(--n700); }
@@ -232,7 +236,9 @@ body {
 .card-name { font-family: var(--mono); font-size: 14px; color: var(--n100); }
 .card-addr { font-family: var(--mono); font-size: 8.5px; color: var(--n700); }
 .card-blocks { font-family: var(--mono); font-size: 21px; color: var(--accent-glow); margin: 5px 0 8px; letter-spacing: -.01em; }
-.card-owns { font-family: var(--mono); font-size: 9.5px; color: var(--n600); line-height: 1.7; }
+/* Takes the slack, so the rows underneath line up across cards whether a node
+   owns three things or one. */
+.card-owns { font-family: var(--mono); font-size: 9.5px; color: var(--n600); line-height: 1.7; flex: 1; }
 .card-mem { margin-top: 9px; }
 .mem-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--n600); }
 .mem-bar { height: 3px; background: var(--n800); border-radius: 2px; margin-top: 4px; overflow: hidden; }
