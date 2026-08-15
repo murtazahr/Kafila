@@ -137,10 +137,10 @@ body {
   flex: 1; resize: none; overflow-y: auto; max-height: 108px;
   background: var(--sunk); border: 1px solid var(--n800); border-radius: 4px;
   color: var(--n100); padding: 7px 9px; font-family: var(--sans); font-size: 12px;
-  line-height: 1.45; min-height: 32px;
+  line-height: 1.45; min-height: 34px;
 }
 .chat-foot textarea:focus { outline: none; border-color: var(--accent-dim); }
-.chat-foot textarea::placeholder { color: var(--n700); }
+.chat-foot textarea::placeholder { color: var(--n700); white-space: nowrap; text-overflow: ellipsis; }
 .btn {
   border-radius: 4px; padding: 7px 12px; cursor: pointer; white-space: nowrap;
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
@@ -304,7 +304,7 @@ body {
         <div class="panel-body chat-log" id="chatLog"></div>
         <div class="chat-foot">
           <div class="chat-row">
-            <textarea id="prompt" rows="1" placeholder="Send a message…  ⏎ to send, ⇧⏎ for a new line"></textarea>
+            <textarea id="prompt" rows="1" placeholder="Send a message…"></textarea>
             <button class="btn" id="send">Send</button>
           </div>
           <div class="chat-bar">
@@ -1023,9 +1023,10 @@ function setBusy(busy) {
   $("prompt").disabled = busy;
   $("reset").disabled = busy || history.length === 0;
   $("chatState").textContent = busy ? "streaming" : "ready";
-  $("turnCount").textContent = history.length
-    ? `${history.length / 2} turn${history.length === 2 ? "" : "s"} in context`
-    : "";
+  const turns = history.length / 2;
+  $("turnCount").textContent = turns
+    ? `${turns} turn${turns === 1 ? "" : "s"} in context`
+    : "⏎ send · ⇧⏎ newline";
 }
 
 function resetChat() {
@@ -1139,6 +1140,9 @@ prompt.addEventListener("input", () => {
   prompt.style.height = "auto";
   prompt.style.height = Math.min(prompt.scrollHeight, 108) + "px";
 });
+
+// The bar is only written on a state change, so it needs one to start with.
+setBusy(false);
 
 // ---------------------------------------------------------------------------
 boot().then(connect).catch((e) => {
