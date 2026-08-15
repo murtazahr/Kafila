@@ -27,6 +27,25 @@ import (
 	"github.com/ollama/ollama/x/mlxrunner/shard"
 )
 
+// StartThread creates the OS thread a shard's MLX work runs on.
+//
+// The device has to be selected on the thread itself, not merely before it
+// starts: MLX resolves the default device per thread, and a worker that never
+// ran SetDefaultDeviceGPU has no GPU stream at all. Evaluating there fails with
+// "no Stream(gpu, N) in current thread", which reads like a threading bug and
+// is really a missing initialization.
+func StartThread(name string) (*mlxthread.Thread, error) {
+	return mlxthread.Start(name, func() error {
+		if err := mlx.CheckInit(); err != nil {
+			return fmt.Errorf("agent: MLX unavailable: %w", err)
+		}
+		if mlx.GPUIsAvailable() {
+			mlx.SetDefaultDeviceGPU()
+		}
+		return nil
+	})
+}
+
 // Shard is one stage's model and cache state.
 type Shard struct {
 	Model      base.Model
@@ -56,7 +75,32 @@ type Config struct {
 // The model is constructed from the full checkpoint config and then told how
 // many blocks it actually holds. Tensors arrive renumbered from zero, so an
 // unmodified implementation binds them without knowing its absolute offset.
+// A shard's weights, caches and forward passes must all touch MLX from the
+// same OS thread: streams are thread-local, and an array created on one thread
+// cannot be evaluated on another. Loading here rather than in the caller keeps
+// that guarantee in one place, since a server accepts connections on arbitrary
+// goroutines and would otherwise forward from whichever thread it landed on.
 func Load(thread *mlxthread.Thread, cfg Config) (*Shard, error) {
+	var s *Shard
+	load := func() error {
+		var err error
+		s, err = loadOnThread(cfg)
+		return err
+	}
+
+	if thread == nil {
+		if err := load(); err != nil {
+			return nil, err
+		}
+	} else if err := thread.Do(context.Background(), load); err != nil {
+		return nil, err
+	}
+
+	s.thread = thread
+	return s, nil
+}
+
+func loadOnThread(cfg Config) (*Shard, error) {
 	root, err := model.Open(cfg.ModelName)
 	if err != nil {
 		return nil, fmt.Errorf("agent: open %s: %w", cfg.ModelName, err)
@@ -97,7 +141,6 @@ func Load(thread *mlxthread.Thread, cfg Config) (*Shard, error) {
 		Model:      m,
 		Assignment: cfg.Assignment,
 		caches:     m.NewCaches(),
-		thread:     thread,
 	}
 
 	slog.Info("shard loaded",
@@ -147,6 +190,54 @@ func (s *Shard) Forward(b *batch.Batch) (*mlx.Array, error) {
 	return out, nil
 }
 
+// ForwardBytes takes a serialized hidden state, runs the shard's blocks, and
+// returns the result serialized.
+//
+// Decoding, the forward pass and encoding all happen inside one hop onto the
+// MLX thread. That is the whole point of the method: a server accepts on
+// arbitrary goroutines, and building an array there and evaluating it on the
+// worker fails with "no Stream(gpu, N) in current thread". Keeping arrays from
+// ever crossing the boundary is easier to guarantee than remembering to hop at
+// each individual call.
+func (s *Shard) ForwardBytes(dtype mlx.DType, shape []int, payload []byte, seqOffsets, seqQueryLens []int32) (mlx.DType, []int, []byte, error) {
+	var (
+		outDType mlx.DType
+		outShape []int
+		out      []byte
+	)
+
+	err := s.run(func() error {
+		hidden, err := mlx.FromBytes(payload, dtype, shape...)
+		if err != nil {
+			return fmt.Errorf("agent: rebuild hidden state: %w", err)
+		}
+
+		result, _ := s.Model.Forward(&batch.Batch{
+			Hidden:       hidden,
+			SeqOffsets:   seqOffsets,
+			SeqQueryLens: seqQueryLens,
+		}, s.caches)
+		if result == nil {
+			return fmt.Errorf("agent: shard %s produced no hidden state", s.Assignment.Range)
+		}
+		mlx.Eval(result)
+
+		outDType, outShape = result.DType(), result.Dims()
+		out, err = result.Bytes()
+		return err
+	})
+	if err != nil {
+		return 0, nil, nil, err
+	}
+
+	for _, n := range seqQueryLens {
+		s.offset += int(n)
+		break
+	}
+
+	return outDType, outShape, out, nil
+}
+
 // Unembed projects a hidden state to vocabulary logits. Only the head owns the
 // projection, so this fails anywhere else rather than returning something
 // meaningless.
@@ -181,6 +272,13 @@ func (s *Shard) Reset() error {
 }
 
 // run executes fn on the MLX thread when one was supplied.
+//
+// A shard has a thread only when something other than its owner drives it —
+// that is, when it sits behind a Server, whose connections arrive on arbitrary
+// goroutines. A shard driven by a caller that is already on the right thread,
+// such as the head inside the runner's own MLX worker, must be loaded with a
+// nil thread: hopping from inside that worker would wait on the worker itself
+// and deadlock.
 func (s *Shard) run(fn func() error) error {
 	if s.thread == nil {
 		return fn()
