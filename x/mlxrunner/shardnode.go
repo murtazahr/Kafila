@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/x/cluster/agent"
+	"github.com/ollama/ollama/x/cluster/console"
 	"github.com/ollama/ollama/x/cluster/trace"
 	"github.com/ollama/ollama/x/mlxrunner/mlx"
 	"github.com/ollama/ollama/x/mlxrunner/model"
@@ -46,6 +48,9 @@ func ExecuteShard(args []string) error {
 		port      int
 		tracePath string
 		describe  bool
+		nextAddr  string
+		returnAt  string
+		simulated time.Duration
 	)
 
 	fs := flag.NewFlagSet("shardnode", flag.ExitOnError)
@@ -60,6 +65,9 @@ func ExecuteShard(args []string) error {
 	fs.IntVar(&port, "port", 0, "HTTP port for the runner interface (head only)")
 	fs.StringVar(&tracePath, "trace", "", "write the NDJSON span stream here")
 	fs.BoolVar(&describe, "describe", false, "print the model's block count and tie flag, then exit")
+	fs.StringVar(&nextAddr, "next", "", "address of the next node in the ring")
+	fs.StringVar(&returnAt, "return-listen", "", "address the last node delivers back to (head only)")
+	fs.DurationVar(&simulated, "simulate-latency", 0, "inject a one-way delay on the link to the next node, standing in for distance this deployment does not have")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -81,13 +89,15 @@ func ExecuteShard(args []string) error {
 	}
 
 	spec := agent.NodeSpec{
-		Model:          modelName,
-		Blocks:         blocks,
-		Head:           isHead,
-		Tail:           isTail,
-		Listen:         listen,
-		TotalBlocks:    totalArg,
-		TiedEmbeddings: tied,
+		Model:            modelName,
+		Blocks:           blocks,
+		Head:             isHead,
+		Tail:             isTail,
+		Listen:           listen,
+		TotalBlocks:      totalArg,
+		TiedEmbeddings:   tied,
+		Next:             nextAddr,
+		SimulatedLatency: simulated,
 	}
 	if stagesArg != "" {
 		spec.Stages = strings.Split(stagesArg, ",")
@@ -114,24 +124,24 @@ func ExecuteShard(args []string) error {
 	if !spec.Head {
 		return serveShardNode(spec)
 	}
-	return runHeadNode(spec, port, tracePath)
+	return runHeadNode(spec, port, tracePath, returnAt)
 }
 
 // serveShardNode is what a non-head process runs: load the blocks, serve them,
 // and stay up until it is killed.
 func serveShardNode(spec agent.NodeSpec) error {
-	srv, err := agent.ServeNode(spec)
+	node, err := agent.ServeRing(spec, 3*time.Minute)
 	if err != nil {
 		return err
 	}
-	defer srv.Close()
+	defer node.Close()
 
-	return srv.Serve()
+	return node.Serve()
 }
 
 // runHeadNode loads the head's blocks, connects to the stages downstream, and
 // serves the composed pipeline through the runner's own HTTP interface.
-func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
+func runHeadNode(spec agent.NodeSpec, port int, tracePath, returnAt string) error {
 	worker, err := agent.StartThread("shardhead")
 	if err != nil {
 		return err
@@ -157,20 +167,37 @@ func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
 		return fmt.Errorf("load head shard: %w", err)
 	}
 
-	stages, err := agent.DialStages(spec.Stages, spec.StageBlocks, 120*time.Second)
+	// The head listens for the frame to come back round before it dials
+	// onward: the last node connects here, and a ring where everyone dials
+	// before listening cannot close.
+	ret, err := agent.ListenReturn(returnAt)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		for _, s := range stages {
-			_ = s.Close()
+	defer ret.Close()
+	go func() {
+		if err := ret.Serve(); err != nil {
+			slog.Error("ring return listener stopped", "error", err)
 		}
 	}()
 
-	pipeline, err := agent.NewPipelineModel(head, stages)
+	next, err := agent.DialLink("next", spec.Next, 3*time.Minute)
 	if err != nil {
 		return err
 	}
+	defer next.Close()
+	next.Simulate(spec.SimulatedLatency)
+
+	pipeline, err := agent.NewRingModel(head, next, ret, describeStages(spec))
+	if err != nil {
+		return err
+	}
+
+	// One stream feeds the durable trace and the live console. A dashboard on
+	// a separately-derived feed would eventually disagree with the benchmark,
+	// and the disagreement would stay invisible.
+	events := trace.NewBroadcaster()
+	var sink io.Writer = events
 
 	if tracePath != "" {
 		f, err := os.OpenFile(tracePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -178,8 +205,9 @@ func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
 			return fmt.Errorf("open trace: %w", err)
 		}
 		defer f.Close()
-		pipeline.Trace(trace.NewRecorder(f, "pipeline", "head", spec.Blocks))
+		sink = io.MultiWriter(f, events)
 	}
+	pipeline.Trace(trace.NewRecorder(sink, "pipeline", "head", spec.Blocks))
 
 	// Every stage must start from the same offset, or their positions have
 	// already drifted before a single token is processed.
@@ -197,8 +225,9 @@ func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
 		return err
 	}
 
-	slog.Info("pipeline head ready",
-		"blocks", spec.Blocks, "stages", len(stages),
+	slog.Info("ring head ready",
+		"blocks", spec.Blocks, "nodes", len(spec.Stages)+1,
+		"next", spec.Next, "return", ret.Addr(),
 		"context", runner.contextLength, "port", port)
 
 	// The head serves the same endpoints an unsplit runner does, so nothing
@@ -206,12 +235,14 @@ func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
 	mux := runner.newMux(func() uint64 {
 		return uint64(mlx.ActiveMemory() + mlx.CacheMemory())
 	})
-	mux.HandleFunc("GET /v1/topology", func(w http.ResponseWriter, r *http.Request) {
+	console.Register(mux, events, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(describeTopology(pipeline, spec)); err != nil {
 			slog.Error("encode topology", "error", err)
 		}
 	})
+
+	slog.Info("console ready", "url", fmt.Sprintf("http://127.0.0.1:%d/", port))
 
 	return runner.Run("127.0.0.1", strconv.Itoa(port), mux)
 }
@@ -219,7 +250,28 @@ func runHeadNode(spec agent.NodeSpec, port int, tracePath string) error {
 // describeTopology reports the shape of the pipeline: which node holds which
 // blocks, and where each one is. It is what a dashboard renders and what a
 // future coordinator would use to check a plan against reality.
-func describeTopology(pipeline *agent.PipelineModel, spec agent.NodeSpec) map[string]any {
+// describeStages renders the nodes downstream from the launch flags. The head
+// does not talk to them directly in a ring, so their details come from the plan
+// rather than from a connection.
+func describeStages(spec agent.NodeSpec) []agent.StageInfo {
+	out := make([]agent.StageInfo, 0, len(spec.Stages))
+	for i, addr := range spec.Stages {
+		blocks := ""
+		if i < len(spec.StageBlocks) {
+			blocks = spec.StageBlocks[i].String()
+		}
+		role := "middle"
+		if i == len(spec.Stages)-1 {
+			role = shard.Tail.String()
+		}
+		out = append(out, agent.StageInfo{
+			Name: fmt.Sprintf("stage%d", i+1), Blocks: blocks, Address: addr, Role: role,
+		})
+	}
+	return out
+}
+
+func describeTopology(pipeline *agent.RingModel, spec agent.NodeSpec) map[string]any {
 	nodes := []map[string]any{{
 		"index":   0,
 		"name":    "head",
@@ -235,23 +287,17 @@ func describeTopology(pipeline *agent.PipelineModel, spec agent.NodeSpec) map[st
 			"index":   i + 1,
 			"name":    s.Name,
 			"blocks":  s.Blocks,
-			"role":    stageRole(i, len(pipeline.Stages())),
+			"role":    s.Role,
 			"address": s.Address,
 		})
 	}
 
 	return map[string]any{
+		"topology":    "ring",
 		"model":       spec.Model,
 		"blocks":      spec.TotalBlocks,
 		"tied":        spec.TiedEmbeddings,
 		"stage_count": len(nodes),
 		"nodes":       nodes,
 	}
-}
-
-func stageRole(i, n int) string {
-	if i == n-1 {
-		return shard.Tail.String()
-	}
-	return "middle"
 }

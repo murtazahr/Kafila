@@ -42,7 +42,30 @@ const (
 	PhaseAlign   Phase = "align"
 )
 
-// Request is the header accompanying an activation sent downstream.
+// StageReport is what one node contributes as a frame passes through it.
+//
+// The frame accumulates these on its way round the ring, so by the time it
+// reaches the head it carries the whole circuit's account of itself. That is
+// the only way to attribute time without a shared clock: each node measures
+// itself on its own monotonic clock, and the head — which times the round trip
+// on its own — subtracts the sum to learn what was in flight.
+type StageReport struct {
+	Node string `json:"node"`
+
+	// Compute is how long this node spent in its blocks.
+	Compute time.Duration `json:"compute_ns"`
+
+	// CacheOffset is where this node's caches rest afterwards. Every node must
+	// agree, since the offset drives RoPE and mask construction.
+	CacheOffset int `json:"cache_offset"`
+
+	// Simulated is delay this node was told to inject rather than time it
+	// really spent. It is reported separately so a measurement is never
+	// confused with a demonstration.
+	Simulated time.Duration `json:"simulated_ns,omitempty"`
+}
+
+// Request is the header accompanying an activation travelling round the ring.
 type Request struct {
 	// Request identifies the inference request, so a trace can be reassembled
 	// across stages by causality rather than by comparing clocks.
@@ -70,6 +93,54 @@ type Request struct {
 	// SeqQueryLens is each row's real query length. Values below the padded
 	// length mark a tail that must be masked out.
 	SeqQueryLens []int32 `json:"seq_query_lens"`
+
+	// Seq identifies the circuit this frame belongs to. Requests are processed
+	// one at a time, so this is a check rather than a router: a frame arriving
+	// with the wrong sequence means the ring has lost its place, which would
+	// otherwise show up as quietly wrong output.
+	Seq uint64 `json:"seq"`
+
+	// Reports accumulate as the frame travels. Each node appends its own
+	// before forwarding.
+	Reports []StageReport `json:"reports,omitempty"`
+
+	// Reset asks every node to drop its cache state as the frame passes. Used
+	// by alignment, which travels the same path as everything else so it
+	// cannot take a different route and disagree.
+	Reset bool `json:"reset,omitempty"`
+}
+
+// TotalCompute sums what every node reported spending in its blocks.
+func (r Request) TotalCompute() time.Duration {
+	var d time.Duration
+	for _, s := range r.Reports {
+		d += s.Compute
+	}
+	return d
+}
+
+// TotalSimulated sums delay that was injected rather than spent.
+func (r Request) TotalSimulated() time.Duration {
+	var d time.Duration
+	for _, s := range r.Reports {
+		d += s.Simulated
+	}
+	return d
+}
+
+// OffsetsAgree reports whether every node's caches rest at the same token, and
+// returns the first disagreement it finds.
+func (r Request) OffsetsAgree() (int, bool) {
+	if len(r.Reports) == 0 {
+		return 0, true
+	}
+	want := r.Reports[0].CacheOffset
+	for _, s := range r.Reports[1:] {
+		if s.CacheOffset != want {
+			return s.CacheOffset, false
+		}
+	}
+	return want, true
 }
 
 // Response is the header returned by a stage that has run its blocks.

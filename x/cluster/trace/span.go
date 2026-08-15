@@ -123,6 +123,24 @@ type Hop struct {
 	Symmetric bool `json:"symmetric"`
 
 	Bytes int64 `json:"bytes,omitempty"`
+
+	// Simulated is delay that was injected rather than incurred. Reported
+	// apart from everything measured so a demonstration can never be read as
+	// a result.
+	Simulated time.Duration `json:"simulated_ns,omitempty"`
+
+	// Stages breaks a whole circuit down by node. A ring has no single machine
+	// observing any one link, so this is how the parts are attributed: each
+	// node measured itself on its own clock.
+	Stages []StageTime `json:"stages,omitempty"`
+}
+
+// StageTime is one node's contribution to a circuit.
+type StageTime struct {
+	Node        string        `json:"node"`
+	Compute     time.Duration `json:"compute_ns"`
+	Simulated   time.Duration `json:"simulated_ns,omitempty"`
+	CacheOffset int           `json:"cache_offset"`
 }
 
 // InFlight is the round trip with the receiver's own work removed: the time

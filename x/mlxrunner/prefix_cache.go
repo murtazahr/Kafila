@@ -497,6 +497,20 @@ func (c *prefixCache) freeAll() {
 	}
 }
 
+// discard frees every cache layer and forgets the reuse trie, so the next
+// request starts from nothing.
+//
+// Only a model whose cache state is not all in this process needs this. Reuse
+// works by rewinding the caches here to a prefix a previous request left
+// behind; a model with state on other machines would have to rewind those too,
+// and nothing here can do that. Forgetting the trie is what keeps this process
+// from believing in a prefix its peers no longer hold.
+func (c *prefixCache) discard() {
+	c.freeAll()
+	c.root = nil
+	c.activePath = nil
+}
+
 func (c *prefixCache) minCacheOffset() int {
 	offset := 0
 	found := false

@@ -49,6 +49,15 @@ type NodeSpec struct {
 	// TiedEmbeddings mirrors the checkpoint's tie flag so a node skips the
 	// redundant lm_head.
 	TiedEmbeddings bool
+
+	// Next is the node this one forwards to. In a ring every node has one,
+	// and the last node's points back at the head.
+	Next string
+
+	// SimulatedLatency is delay injected on the link to Next, standing in for
+	// a distance this deployment does not physically have. It is reported
+	// separately from measurement everywhere it appears.
+	SimulatedLatency time.Duration
 }
 
 // Assignment renders the spec as a shard assignment.
@@ -87,6 +96,9 @@ func (n NodeSpec) Validate() error {
 	}
 	if !n.Head && n.Listen == "" {
 		return errors.New("agent: a non-head node needs an address to serve on")
+	}
+	if n.Next == "" {
+		return errors.New("agent: every node in a ring forwards to another; none was given")
 	}
 	return nil
 }

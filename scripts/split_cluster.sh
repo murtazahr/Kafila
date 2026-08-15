@@ -22,6 +22,18 @@ MODEL="${2:-qwen3-mlx:0.6b}"
 NODES="${3:-3}"
 HEAD_PORT="${HEAD_PORT:-9300}"
 BASE_PORT="${BASE_PORT:-9301}"
+RETURN_PORT="${RETURN_PORT:-9310}"
+
+# One-way delays injected on each ring link when SIMULATE=1, standing in for a
+# geography this deployment does not have. Measured public figures, roughly:
+# Melbourne->Mumbai ~75ms, Mumbai->Sydney ~80ms, Sydney->Melbourne ~7ms.
+#
+# They are injected on the wire and reported apart from anything measured, so a
+# demonstration is never mistaken for a result. Expect throughput to collapse:
+# that is the point. It shows why you would not spread a decode loop across
+# three continents.
+SIMULATE="${SIMULATE:-0}"
+LINK_DELAYS=("75ms" "80ms" "7ms")
 LOG_DIR="${LOG_DIR:-/tmp/split-cluster}"
 TRACE="${TRACE:-$LOG_DIR/trace.ndjson}"
 
@@ -67,30 +79,49 @@ start_cluster() {
 
     echo "model $MODEL: $TOTAL blocks across $NODES node(s), tied=$TIED"
 
-    # Start the downstream nodes first so the head has something to connect to.
-    # It retries anyway, since loading a shard reads hundreds of megabytes.
+    [ "$SIMULATE" = "1" ] && echo "simulated link delays: ${LINK_DELAYS[*]} (demo only, reported separately)"
+
+    # A ring: head -> stage1 -> ... -> stageN -> head. Every node forwards to
+    # the next rather than answering its caller, so the hidden state crosses
+    # each link once instead of twice and the head is free the moment it has
+    # dispatched.
     local stages=""
     for ((i = NODES - 1; i >= 1; i--)); do
         read -r start end < <(blocks_for "$i" "$TOTAL")
         local port=$((BASE_PORT + i - 1))
-        local tail_flag=""
-        [ "$i" -eq $((NODES - 1)) ] && tail_flag="--tail"
+        local tail_flag="" next
+        if [ "$i" -eq $((NODES - 1)) ]; then
+            tail_flag="--tail"
+            next="127.0.0.1:$RETURN_PORT"        # last node closes the ring
+        else
+            next="127.0.0.1:$((BASE_PORT + i))"
+        fi
+
+        local delay=""
+        [ "$SIMULATE" = "1" ] && delay="--simulate-latency ${LINK_DELAYS[$i]}"
 
         "$OLLAMA" runner --shard --model "$MODEL" \
             --blocks "$start:$end" --total-blocks "$TOTAL" $tied_flag $tail_flag \
-            --listen "127.0.0.1:$port" > "$LOG_DIR/stage$i.log" 2>&1 &
+            --listen "127.0.0.1:$port" --next "$next" $delay \
+            > "$LOG_DIR/stage$i.log" 2>&1 &
 
-        echo "  stage $i  blocks [$start,$end)  127.0.0.1:$port"
+        echo "  stage $i  blocks [$start,$end)  127.0.0.1:$port -> $next"
         stages="127.0.0.1:$port=$start:$end${stages:+,$stages}"
     done
 
     read -r start end < <(blocks_for 0 "$TOTAL")
+    local head_delay=""
+    [ "$SIMULATE" = "1" ] && head_delay="--simulate-latency ${LINK_DELAYS[0]}"
+
     "$OLLAMA" runner --shard --model "$MODEL" \
         --blocks "$start:$end" --total-blocks "$TOTAL" $tied_flag --head \
-        --stages "$stages" --port "$HEAD_PORT" --trace "$TRACE" \
+        --stages "$stages" --next "127.0.0.1:$BASE_PORT" \
+        --return-listen "127.0.0.1:$RETURN_PORT" $head_delay \
+        --port "$HEAD_PORT" --trace "$TRACE" \
         > "$LOG_DIR/head.log" 2>&1 &
 
-    echo "  head     blocks [$start,$end)  127.0.0.1:$HEAD_PORT"
+    echo "  head     blocks [$start,$end)  127.0.0.1:$HEAD_PORT -> 127.0.0.1:$BASE_PORT"
+    echo "  ring closes at 127.0.0.1:$RETURN_PORT"
     echo
     echo "logs  $LOG_DIR"
     echo "trace $TRACE"

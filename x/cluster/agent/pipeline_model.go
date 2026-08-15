@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ollama/ollama/x/cluster/trace"
 	"github.com/ollama/ollama/x/cluster/wire"
@@ -67,11 +68,19 @@ func (p *PipelineModel) Blocks() shard.Range { return p.local.Blocks() }
 func (p *PipelineModel) Forward(b *batch.Batch, caches []cache.Cache) (hidden, auxHidden *mlx.Array) {
 	phase, token, chunk := classify(b)
 
+	// The head's own blocks are work like any other stage's, and nothing else
+	// reports them: hops describe the stages downstream, so without this the
+	// head would look idle for the part of every token it is actually
+	// computing, and there would be no per-token record at all.
+	started := time.Now()
 	local, err := p.local.Forward(b)
 	if err != nil {
 		slog.Error("pipeline: head forward failed", "error", err)
 		return nil, nil
 	}
+	p.rec.Record(trace.Phase(phase), trace.KindCompute, time.Since(started),
+		trace.Token(token), trace.Chunk(chunk))
+
 	h := local
 
 	for _, s := range p.stages {
