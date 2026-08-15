@@ -168,6 +168,10 @@ body {
 .bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s; }
 .bar-fill.ghost { background: var(--n700); }
 
+.stages { margin-top: 10px; font-family: var(--mono); font-size: 9px; line-height: 1.7; }
+.stages .row { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; color: var(--n600); }
+.stages .row b { color: var(--n300); font-weight: 400; }
+.stages .row i { color: var(--accent); font-style: normal; }
 .events { font-family: var(--mono); font-size: 9.5px; line-height: 1.85; }
 .ev { display: grid; grid-template-columns: 44px 1fr; gap: 7px; color: var(--n600); }
 .ev b { color: var(--n300); font-weight: 400; }
@@ -262,10 +266,15 @@ body {
             <div class="metric"><div class="metric-label">Payload / hop</div><div class="metric-value" id="mPayload">—</div></div>
           </div>
           <div class="metric-pair">
-            <div class="metric"><div class="metric-label">Hop round trip</div><div class="metric-value" id="mRtt">—</div></div>
-            <div class="metric"><div class="metric-label">In flight</div><div class="metric-value" id="mFlight">—</div></div>
+            <div class="metric"><div class="metric-label">Circuit</div><div class="metric-value" id="mRtt">—</div></div>
+            <div class="metric"><div class="metric-label">Node compute</div><div class="metric-value" id="mCompute">—</div></div>
           </div>
-          <div class="metric-label" style="margin-top:4px" id="flightNote">round trip less the receiver's own reported time</div>
+          <div class="metric-pair">
+            <div class="metric"><div class="metric-label">In flight</div><div class="metric-value" id="mFlight">—</div></div>
+            <div class="metric"><div class="metric-label">Simulated</div><div class="metric-value" id="mSim">—</div></div>
+          </div>
+          <div class="metric-label" style="margin-top:4px" id="flightNote">circuit less what every node reported spending</div>
+          <div class="stages" id="stageBreak"></div>
         </div>
       </section>
 
@@ -305,8 +314,9 @@ const state = {
   phase: "idle",
   busy: new Set(),
   unreachable: new Set(),
-  tokens: 0, hops: 0, bytes: 0,
-  lastPayload: 0, lastRtt: 0, lastFlight: 0,
+  tokens: 0, hops: 0, circuits: 0, bytes: 0,
+  lastPayload: 0, lastRtt: 0, lastFlight: 0, lastCompute: 0, lastSim: 0,
+  stages: [], stretched: false,
   tps: null,
   events: [],
   streaming: false,
@@ -475,7 +485,7 @@ function renderMap() {
     arcs += `<path class="arc" id="arc-${i}" d="${arcPath(pts[i], pts[i + 1])}"/>`;
   }
   if (pts.length > 1) {
-    arcs += `<path class="arc" id="arc-return" d="${arcPath(pts[pts.length - 1], pts[0])}" stroke-dasharray="2 4"/>`;
+    arcs += `<path class="arc" id="arc-return" d="${arcPath(pts[pts.length - 1], pts[0])}"/>`;
   }
 
   const marks = state.nodes.map((n, i) => {
@@ -522,37 +532,46 @@ function paintMap() {
   });
 }
 
-// Fly a dot along the arc between two stages, so a hop is visible as movement
-// rather than as a number changing.
-function flyPacket(fromIdx, toIdx) {
-  const svg = $("map");
-  const path = fromIdx < toIdx
-    ? document.getElementById(`arc-${fromIdx}`)
-    : document.getElementById("arc-return");
-  const packet = document.getElementById("packet");
-  if (!path || !packet || !path.getTotalLength) return;
+// Fly a dot along one leg of the ring, over a given duration, so a hop reads as
+// movement rather than as a number changing.
+function flyLeg(fromIdx, toIdx, dur) {
+  return new Promise((resolve) => {
+    const forward = toIdx === fromIdx + 1;
+    const path = forward
+      ? document.getElementById(`arc-${fromIdx}`)
+      : document.getElementById("arc-return");
+    const packet = document.getElementById("packet");
+    if (!path || !packet || !path.getTotalLength) { resolve(); return; }
 
-  const len = path.getTotalLength();
-  const started = performance.now();
-  const dur = 320;
-  packet.style.opacity = "1";
+    if (path.id === "arc-return") path.classList.add("live");
+    else path.classList.add("live");
 
-  function step(now) {
-    let t = (now - started) / dur;
-    if (t >= 1) { packet.style.opacity = "0"; return; }
-    if (fromIdx > toIdx) t = 1 - t;           // return leg runs backwards
-    const p = path.getPointAtLength(len * t);
-    packet.setAttribute("cx", p.x);
-    packet.setAttribute("cy", p.y);
+    const len = path.getTotalLength();
+    const started = performance.now();
+    packet.style.opacity = "1";
+
+    function step(now) {
+      let t = (now - started) / dur;
+      if (t >= 1) {
+        packet.style.opacity = "0";
+        path.classList.remove("live");
+        resolve();
+        return;
+      }
+      const p = path.getPointAtLength(len * (forward ? t : 1 - t));
+      packet.setAttribute("cx", p.x);
+      packet.setAttribute("cy", p.y);
+      requestAnimationFrame(step);
+    }
     requestAnimationFrame(step);
-  }
-  requestAnimationFrame(step);
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Live stream
 // ---------------------------------------------------------------------------
 let decodeTimes = [];
+let replaying = false;
 
 function connect() {
   const es = new EventSource("/v1/events");
@@ -563,54 +582,86 @@ function connect() {
   es.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
-    ev.type === "hop" ? onHop(ev) : onSpan(ev);
+    ev.type === "hop" ? onCircuit(ev) : onSpan(ev);
     paint();
   };
 }
 
 function indexOfNode(name) {
-  return state.nodes.findIndex((n) => n.name === name);
+  return state.nodes.findIndex((n) => n.name === name || n.blocks === name);
 }
 
-function onHop(h) {
-  if (h.phase === "align") {
-    pushEvent(h.to, "align", false);
-    return;
-  }
+// A circuit event arrives once the frame has been all the way round, carrying
+// each node's own account of its part. Replaying it afterwards is the only way
+// to show the journey: the head learns nothing about the middle of the circuit
+// until the end of it.
+function onCircuit(h) {
+  if (h.phase === "align") { pushEvent("ring", "aligned", false); return; }
 
-  state.hops++;
-  state.bytes += h.bytes || 0;
+  state.circuits++;
+  state.hops += (h.stages ? h.stages.length : state.nodes.length);
+  state.bytes += (h.bytes || 0) * (h.stages ? h.stages.length : 1);
   state.lastPayload = h.bytes || state.lastPayload;
   state.lastRtt = h.round_trip_ns || 0;
-  state.lastFlight = Math.max(0, (h.round_trip_ns || 0) - (h.remote_duration_ns || 0));
+  state.lastCompute = h.remote_duration_ns || 0;
+  state.lastSim = h.simulated_ns || 0;
+  state.lastFlight = Math.max(0, state.lastRtt - state.lastCompute);
   state.phase = h.phase;
   state.streaming = true;
+  state.stages = h.stages || [];
 
-  const from = indexOfNode(h.from), to = indexOfNode(h.to);
-  if (from >= 0 && to >= 0) flyPacket(from, to);
+  replayCircuit(h);
 
-  // Decode is one node at a time; prefill may have several going at once.
-  if (h.phase === "decode") state.busy = new Set([h.to]);
-  else state.busy.add(h.to);
-
-  state.unreachable.delete(h.to);
   clearTimeout(state.idleTimer);
-  state.idleTimer = setTimeout(goIdle, 1200);
+  state.idleTimer = setTimeout(goIdle, 1500);
 }
+
+// Replay the circuit at the speed it actually happened, so an audience sees the
+// real shape of it. A loopback circuit is a few milliseconds, far too quick to
+// follow, so short ones are stretched to a floor — the animation is slowed, the
+// numbers beside it are not.
+async function replayCircuit(h) {
+  if (replaying) return;
+  replaying = true;
+
+  const stages = h.stages || [];
+  const n = state.nodes.length;
+  const real = (h.round_trip_ns || 0) / 1e6;
+  const scale = real >= 350 ? 1 : 350 / Math.max(real, 1);
+  state.stretched = scale > 1;
+
+  for (let i = 0; i < n; i++) {
+    const st = stages[i] || {};
+    const compute = (st.compute_ns || 0) / 1e6 * scale;
+    const wire = (st.simulated_ns || 0) / 1e6 * scale || 40;
+
+    state.busy = new Set([state.nodes[i].name]);
+    paint();
+    await sleep(Math.max(compute, 60));
+
+    state.busy.clear();
+    paint();
+    await flyLeg(i, (i + 1) % n, Math.max(wire, 120));
+  }
+
+  replaying = false;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function onSpan(s) {
   if (s.phase === "decode" && s.token >= 0 && s.kind === "compute") {
     state.tokens = Math.max(state.tokens, s.token + 1);
     const now = performance.now();
     decodeTimes.push(now);
-    decodeTimes = decodeTimes.filter((t) => now - t < 4000);
+    decodeTimes = decodeTimes.filter((t) => now - t < 5000);
     if (decodeTimes.length > 2) {
       const span = (decodeTimes.at(-1) - decodeTimes[0]) / 1000;
       state.tps = span > 0 ? (decodeTimes.length - 1) / span : null;
     }
   }
   if (s.phase === "prefill") state.phase = "prefill";
-  if (s.note && s.note.includes("diverged")) pushEvent("cluster", "cache flush", true);
+  if (s.note && s.note.includes("diverged")) pushEvent("ring", "cache flush", true);
 }
 
 function goIdle() {
@@ -640,20 +691,28 @@ function paint() {
   $("mBytes").textContent = bytes(state.bytes);
   $("mPayload").textContent = state.lastPayload ? bytes(state.lastPayload) : "—";
   $("mRtt").textContent = state.lastRtt ? ns(state.lastRtt) : "—";
+  $("mCompute").textContent = state.lastCompute ? ns(state.lastCompute) : "—";
   $("mFlight").textContent = state.lastFlight ? ns(state.lastFlight) : "—";
+  $("mSim").textContent = state.lastSim ? ns(state.lastSim) : "none";
+
+  $("stageBreak").innerHTML = state.stages.map((st) => {
+    const sim = st.simulated_ns ? `<i>+${ns(st.simulated_ns)}</i>` : "<span></span>";
+    return `<div class="row"><span>${st.node}</span><b>${ns(st.compute_ns || 0)}</b>${sim}</div>`;
+  }).join("");
 
   const base = 94.94;
   const split = state.tps || 0;
   $("splitTps").textContent = split ? `${split.toFixed(2)} tok/s` : "—";
   $("splitBar").style.width = `${Math.min(100, split / base * 100)}%`;
-  $("hopSummary").textContent = state.hops
-    ? `${state.hops} hops · ${bytes(state.bytes)} moved`
+  $("hopSummary").textContent = state.circuits
+    ? `${state.circuits} circuits · ${state.hops} hops · ${bytes(state.bytes)} moved`
     : "awaiting first request";
 
+  const shape = state.stretched ? " · replay slowed to be followable" : "";
   $("topoNote").textContent = state.phase === "prefill"
-    ? "prefill · stages overlap, all may compute at once"
+    ? "prefill · ring, one chunk at a time" + shape
     : state.phase === "decode"
-      ? "decode · strict turn-taking, one node at a time"
+      ? "decode · ring, one node at a time" + shape
       : "idle";
 
   $("events").innerHTML = state.events.map((e) =>
@@ -707,7 +766,7 @@ async function send() {
   const out = addTurn("Completion", "out");
   out.innerHTML = '<span class="caret"></span>';
 
-  state.tokens = 0; state.hops = 0; state.bytes = 0;
+  state.tokens = 0; state.hops = 0; state.circuits = 0; state.bytes = 0; state.stages = [];
   decodeTimes = [];
 
   try {
