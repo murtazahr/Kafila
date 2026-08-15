@@ -49,6 +49,31 @@ reaching MLX outside that path has to observe the same rule. In particular
 CUDA while passing on Metal. Tests need `runtime.LockOSThread`, and any future
 shard agent must keep its MLX work on the pinned thread.
 
+## Concurrent MLX processes contend, and tests go flaky
+
+`go test ./x/...` runs package binaries in parallel, so several processes
+initialize MLX and drive the same GPU at once. Roughly one run in three then
+fails somewhere unrelated to what changed, with:
+
+    mlx: There is no Stream(gpu, 0) in current thread
+
+The failure moves between packages from run to run, which is the signature of
+contention rather than a bug in whichever test reported it. Adding another
+MLX-using package makes it more likely, since it adds another concurrent
+process.
+
+Run the suite with `-p 1` when the result has to be trusted:
+
+```sh
+go test ./x/... -count=1 -p 1
+```
+
+This is the same underlying limitation that stops two shards sharing a process
+(see the pipeline notes): MLX keeps global state that several independent
+models stepping on each other will disturb. Across processes it is intermittent
+rather than a hard deadlock, which makes it more annoying to diagnose and no
+less real.
+
 ## Wired-memory limits do not exist on CUDA
 
 `configureWiredMemory()` runs during model load and calls
