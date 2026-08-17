@@ -1,88 +1,125 @@
-# Contributing to Ollama
+# Contributing to Kafila
 
-Thank you for your interest in contributing to Ollama! Here are a few guidelines to help get you started.
+Kafila is a research platform for distributed split inference. It is early, and
+the parts most worth improving are the ones the research questions point at
+rather than the surface.
+
+## Before you start: the contributor agreement
+
+Kafila is dual-licensed — [PolyForm Noncommercial](LICENSE.md) for research and
+personal use, commercial terms otherwise. Offering commercial terms requires the
+licensor to hold rights to all the code being licensed, so **contributions need
+a contributor licence agreement granting a licence broad enough to permit
+commercial sublicensing**.
+
+This has to be in place before a contribution is merged, not after. Please
+[open an issue](https://github.com/murtazahr/Kafila/issues) or email
+<murtazahatimr@icloud.com> before starting work, and the agreement can be sorted
+out first. See [LICENSING.md](LICENSING.md).
 
 ## Set up
 
-See the [development documentation](./docs/development.md) for instructions on how to build and run Ollama locally.
+```sh
+cmake -B build .
+cmake --build build --parallel 8
+```
 
-### Ideal issues
+For Go-only iteration against an existing native payload:
 
-* [Bugs](https://github.com/ollama/ollama/issues?q=is%3Aissue+is%3Aopen+label%3Abug): issues where Ollama stops working or where it results in an unexpected error.
-* [Performance](https://github.com/ollama/ollama/issues?q=is%3Aissue+is%3Aopen+label%3Aperformance): issues to make Ollama faster at model inference, downloading or uploading.
-* [Security](https://github.com/ollama/ollama/blob/main/SECURITY.md): issues that could lead to a security vulnerability. As mentioned in [SECURITY.md](https://github.com/ollama/ollama/blob/main/SECURITY.md), please do not disclose security vulnerabilities publicly.
+```sh
+go build .
+```
 
-### Issues that are harder to review
+See [`AGENTS.md`](AGENTS.md) and [`docs/development.md`](docs/development.md) for
+prerequisites, platform notes and GPU backends.
 
-* New features: new features (e.g. API fields, environment variables) add surface area to Ollama and make it harder to maintain in the long run as they cannot be removed without potentially breaking users in the future.
-* Refactoring: large code improvements are important, but can be harder or take longer to review and merge.
-* Documentation: small updates to fill in or correct missing documentation are helpful, however large documentation additions can be hard to maintain over time.
+To run a split cluster locally:
 
-### Issues that may not be accepted
+```sh
+go build -o ollama . && ./scripts/split_cluster.sh start
+```
 
-* Changes that break backwards compatibility in Ollama's API (including the OpenAI-compatible API)
-* Changes that add significant friction to the user experience
-* Changes that create a large future maintenance burden for maintainers and contributors
+Three processes, one shard each, with the operations console on
+<http://127.0.0.1:9300>.
 
-## Proposing a (non-trivial) change
+## Where help is most useful
 
-> By "non-trivial", we mean a change that is not a bug fix or small
-> documentation update. If you are unsure, please ask us on our [Discord
-> server](https://discord.gg/ollama).
+[`research/open-questions.md`](research/open-questions.md) records twelve open
+problems, each with what is unresolved and what the system currently does
+instead. Those are the substance of the project. R4 (partitioning under
+heterogeneous nodes), R5 (activation transport precision) and R11 (prefix cache
+reuse across a ring) are the ones where an implementation would settle an
+argument.
 
-Before opening a non-trivial Pull Request, please open an issue to discuss the change and
-get feedback from the maintainers. This helps us understand the context of the
-change and how it fits into Ollama's roadmap and prevents us from duplicating
-work or you from spending time on a change that we may not be able to accept.
+Beyond those:
 
-Tips for proposals:
+- **A second backend.** CUDA nodes work in code but have never run in a cluster.
+  CPU nodes are not implemented at all.
+- **More architectures.** Only Qwen3 implements `base.Sharded`. Most models
+  should need very little — see `x/models/qwen3/qwen3.go`.
+- **Measurement.** Anything that makes a figure more honest, or that catches a
+  figure which is quietly wrong.
 
-* Explain the problem you are trying to solve, not what you are trying to do.
-* Explain why the change is important.
-* Explain how the change will be used.
-* Explain how the change will be tested.
+## What is harder to accept
 
-Additionally, for bonus points: Provide draft documentation you would expect to
-see if the changes were accepted.
+- **Changes that break the upstream interface.** Kafila's whole approach depends
+  on the split pipeline being indistinguishable from an ordinary runner. A change
+  that requires the server to know about distribution defeats the point.
+- **Cross-clock timing.** Nothing may derive a duration by subtracting one
+  machine's timestamp from another's. See the package comment in
+  `x/cluster/trace`. If a measurement seems to need it, that is the discussion to
+  have in an issue first.
+- **Mixing simulated and measured values.** Injected latency travels in its own
+  field, all the way through. It must never be summed into anything measured.
+- **Large refactors of upstream Ollama code.** They make merging upstream changes
+  painful, and the benefit rarely covers it.
 
 ## Pull requests
 
-**Commit messages**
+**Commit messages.** The title looks like:
 
-The title should look like:
+```
+<package>: <short description>
+```
 
-    <package>: <short description>
+The package is the most affected Go package; if the change does not touch Go
+code, use the directory name. The description starts lowercase and continues the
+sentence *"This changes Kafila to…"*:
 
-The package is the most affected Go package. If the change does not affect Go
-code, then use the directory name instead. Changes to a single well-known
-file in the root directory may use the file name.
+```
+x/cluster/agent: report resident memory from every node
+research: record why prefix reuse cannot span a ring
+```
 
-The short description should start with a lowercase letter and be a
-continuation of the sentence:
+Not:
 
-      "This changes Ollama to..."
+```
+feat: add more emoji
+fix: various improvements
+```
 
-Examples:
+The body should explain **why**, not what — the diff already says what. If a
+change encodes a non-obvious constraint, say so there; several of this
+repository's sharpest bugs were silent, and the commit message is where the next
+person finds out why the code looks the way it does.
 
-      llm/backend/mlx: support the llama architecture
-      CONTRIBUTING: provide clarity on good commit messages, and bad
+**Tests.** Please include them, and test behaviour rather than implementation.
+Note that some tests in `x/` do not survive parallel execution and the suite is
+run with `-p 1`:
 
-Bad Examples:
+```sh
+go test ./x/... -count=1 -p 1
+```
 
-      feat: add more emoji
-      fix: was not using famous web framework
-      chore: generify code
+**Dependencies.** Added sparingly. If a new one is necessary, say why and what
+you tried first.
 
-**Tests**
+## Reporting bugs
 
-Please include tests. Strive to test behavior, not implementation.
+For anything in `x/cluster/` or `x/mlxrunner/shard/`, open an issue here. For
+upstream Ollama behaviour unrelated to split inference, report it to
+[ollama/ollama](https://github.com/ollama/ollama/issues), where it can be fixed
+for everyone.
 
-**New dependencies**
-
-Dependencies should be added sparingly. If you are adding a new dependency,
-please explain why it is necessary and what other ways you attempted that
-did not work without it.
-
-## Need help?
-
-If you need help with anything, feel free to reach out to us on our [Discord server](https://discord.gg/ollama).
+Security issues go to [SECURITY.md](SECURITY.md) instead — please do not open a
+public issue for them.

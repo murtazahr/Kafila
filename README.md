@@ -201,7 +201,7 @@ Upstream capabilities — the CLI, the REST API, the model registry, GGUF models
 
 Kafila is dual-licensed:
 
-- **[PolyForm Noncommercial 1.0.0](LICENSE)** — free for research, teaching, study and
+- **[PolyForm Noncommercial 1.0.0](LICENSE.md)** — free for research, teaching, study and
   personal use. If you are at a university or working on this for something other than
   commercial advantage, this covers you and there is nothing to sign.
 - **Commercial** — for use in a product, a paid service, or commercial operations. See
