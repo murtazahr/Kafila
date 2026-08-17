@@ -5,7 +5,7 @@ and you choose the one that fits what you are doing.
 
 | | Noncommercial | Commercial |
 |---|---|---|
-| **Terms** | [PolyForm Noncommercial 1.0.0](LICENSE) | Negotiated |
+| **Terms** | [PolyForm Noncommercial 1.0.0](LICENSE.md) | Negotiated |
 | **Cost** | Free | Contact the licensor |
 | **Covers** | Research, teaching, study, personal projects, evaluation | Anything the noncommercial terms do not permit |
 | **Source** | Provided | Provided |

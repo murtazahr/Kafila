@@ -1,19 +1,23 @@
-Kafila is available under two licenses.
+# Kafila
 
-  1. The PolyForm Noncommercial License 1.0.0, reproduced below. It permits
-     research, teaching, personal and other noncommercial use at no cost.
+Kafila is available under two licences.
 
-  2. A commercial license, for any use the terms below do not permit. See
-     LICENSING.md.
+1. **The PolyForm Noncommercial License 1.0.0**, reproduced in full below. It
+   permits research, teaching, personal and other noncommercial use at no cost.
 
-Kafila is a fork of Ollama and bundles other third-party software, all of it
-under permissive terms that allow redistribution under these terms provided
-their notices are retained. Those notices are in NOTICE, and the upstream MIT
-license is kept verbatim in LICENSE-OLLAMA-MIT. Nothing here removes any right
-you hold in that upstream software under its own license.
+2. **A commercial licence**, for any use the terms below do not permit. See
+   [LICENSING.md](LICENSING.md).
 
-Licensor: Murtaza Rangwala
-Copyright (c) 2026 Murtaza Rangwala
+**Licensor:** Murtaza Rangwala
+
+**Copyright:** © 2026 Murtaza Rangwala
+
+Kafila is a fork of [Ollama](https://github.com/ollama/ollama) and bundles other
+third-party software, all of it under permissive terms that allow redistribution
+under these terms provided their notices are retained. Those notices are in
+[NOTICE](NOTICE), and the upstream MIT licence is kept verbatim in
+[LICENSE-OLLAMA-MIT](LICENSE-OLLAMA-MIT). Nothing here removes any right you hold
+in that upstream software under its own licence.
 
 ---
 
