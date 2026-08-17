@@ -1,0 +1,103 @@
+Kafila
+Copyright (c) 2026 Murtaza Rangwala
+
+Kafila is distributed under the terms in LICENSE. This file records the
+third-party software it contains and the notices those licenses require to be
+retained.
+
+Each license below permits redistribution of the covered software under
+different terms, including the terms in LICENSE, provided its copyright notice
+and license text are retained. Retaining them is the purpose of this file.
+
+Nothing in Kafila's own terms removes or limits any right you hold in the
+software below under its own license. In particular, the upstream projects
+remain available directly from their authors under the licenses shown here.
+
+
+================================================================================
+Ollama — MIT License
+https://github.com/ollama/ollama
+================================================================================
+
+Kafila is a fork of Ollama. Everything outside x/cluster/, x/mlxrunner/shard/
+and the files listed in LICENSING.md as Kafila's own work originates upstream.
+
+Copyright (c) Ollama
+
+Full license text: LICENSE-OLLAMA-MIT
+
+
+================================================================================
+llama.cpp — MIT License
+https://github.com/ggml-org/llama.cpp
+================================================================================
+
+Fetched at build time and used as the GGUF inference backend.
+
+Copyright (c) 2023-2024 The ggml authors
+
+
+================================================================================
+MLX and MLX-C — MIT License
+https://github.com/ml-explore/mlx
+https://github.com/ml-explore/mlx-c
+================================================================================
+
+Fetched at build time. The Apple Silicon array framework the split-inference
+runner is built on.
+
+Copyright (c) 2023 Apple Inc.
+
+
+================================================================================
+Leaflet 1.9.4 — BSD 2-Clause License
+https://leafletjs.com
+x/cluster/console/lib/leaflet.js, x/cluster/console/lib/leaflet.css
+================================================================================
+
+Vendored into the operations console so the dashboard renders without a CDN.
+
+Copyright (c) 2010-2023, Volodymyr Agafonkin
+Copyright (c) 2010-2011, CloudMade
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+ 1. Redistributions of source code must retain the above copyright notice, this
+    list of conditions and the following disclaimer.
+
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+================================================================================
+Natural Earth — public domain
+https://www.naturalearthdata.com
+x/cluster/console/land.geojson
+================================================================================
+
+The 110m land outline used as the console's offline basemap, simplified by
+scripts/build_worldmap.py. Natural Earth raster and vector map data is in the
+public domain; no permission is needed to use it and no attribution is
+required. It is recorded here as a courtesy.
+
+
+================================================================================
+Go module dependencies
+================================================================================
+
+Kafila's Go dependencies are declared in go.mod and are not vendored into this
+repository. Their licenses travel with them; run `go mod download` and
+`go-licenses report ./...` to produce a current inventory.
