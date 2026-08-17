@@ -199,5 +199,18 @@ Upstream capabilities — the CLI, the REST API, the model registry, GGUF models
 
 ## License
 
-MIT, inherited from Ollama. See [`LICENSE`](LICENSE); the upstream copyright notice is
-retained.
+Kafila is dual-licensed:
+
+- **[PolyForm Noncommercial 1.0.0](LICENSE)** — free for research, teaching, study and
+  personal use. If you are at a university or working on this for something other than
+  commercial advantage, this covers you and there is nothing to sign.
+- **Commercial** — for use in a product, a paid service, or commercial operations. See
+  [`LICENSING.md`](LICENSING.md).
+
+Kafila is a fork of Ollama and bundles llama.cpp, MLX and Leaflet. All are permissive and
+permit redistribution under these terms with their notices retained; those notices are in
+[`NOTICE`](NOTICE), and Ollama's MIT licence is kept verbatim in
+[`LICENSE-OLLAMA-MIT`](LICENSE-OLLAMA-MIT). Nothing here limits any right you hold in that
+upstream software under its own licence — it remains available from its authors under MIT.
+
+Copyright is held by Murtaza Rangwala. Commercial enquiries: <murtazahatimr@icloud.com>.
